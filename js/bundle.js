@@ -3395,19 +3395,19 @@
           if (data.mongodb_connected) {
             this.dbStatusBadge.classList.add('mongo-active');
             this.dbStatusBadge.classList.remove('sqlite-active');
-            this.dbStatusText.textContent = 'MongoDB: 2 DBs Connected';
+            this.dbStatusText.textContent = 'MongoDB Atlas (2 DBs)';
             this.dbStatusBadge.title = `MongoDB Compass Connected!\n` +
               `1. Simulation DB (Live data): ${simName} (collections: geofences, simulation_footprints)\n` +
               `2. Dummy DB (Generated): ${dummyName} (collection: dummy_footprints)\n` +
               `URI: ${data.mongodb_uri}\nClick to copy Compass URI`;
           } else {
-            this.dbStatusBadge.classList.add('sqlite-active');
             this.dbStatusBadge.classList.remove('mongo-active');
-            this.dbStatusText.textContent = 'SQLite (Dual DB Tables)';
-            this.dbStatusBadge.title = `Using SQLite local dual-storage.\n` +
-              `1. Simulation table: simulation_footprints\n` +
-              `2. Dummy table: dummy_footprints\n` +
-              `In MongoDB Compass, connect to: ${this.compassUri}\nClick to copy Compass URI`;
+            this.dbStatusBadge.classList.add('sqlite-active');
+            this.dbStatusText.textContent = 'MongoDB (Connecting...)';
+            this.dbStatusBadge.title = `Connecting to MongoDB Atlas / Compass...\n` +
+              `1. Simulation DB: ${simName}\n` +
+              `2. Dummy DB: ${dummyName}\n` +
+              `Target URI: ${this.compassUri}\nClick to copy Compass URI`;
           }
         })
         .catch(() => {});

@@ -25,7 +25,7 @@ A modern, high-performance geofence management system and map builder with an in
   - Bounding box containment tests
   - Real-time geodesic perimeter and surface area metrics
 - **Persistent Storage**:
-  - Embedded SQLite database (`geofences.db`) with automatic table creation and initial seeding.
+  - Exclusively powered by MongoDB Atlas & MongoDB Compass across two dedicated databases: `simulation_data_db` and `dummy_data_db`. No SQLite.
 - **Zero-Dependency Python Backend**:
   - Dual-engine architecture: Runs with **Flask** if installed, or falls back automatically to Python's built-in `http.server` with standard libraries.
 - **Real-Time Telemetry API**:
@@ -104,23 +104,23 @@ Open `http://localhost:5000` in your browser to access the Geofence Map Builder 
 
 ## MongoDB & MongoDB Compass Integration
 
-The application supports **MongoDB** as its primary persistent database, allowing you to visually inspect, manage, and query your geofences and live footprints using **MongoDB Compass**.
+The application exclusively uses **MongoDB** as its persistent database engine, allowing you to visually inspect, manage, and query your geofences, sample perimeters, and live footprints using **MongoDB Compass** or **MongoDB Atlas**.
+
+### Dedicated Databases & Collections:
+1. **`simulation_data_db`**:
+   - **`geofences`**: Contains all created shapes (Circle, Rectangle, Custom Polygon), sample perimeters, boundary coordinates, colors, and configuration.
+   - **`simulation_footprints`**: Contains real-time telemetry footprints, live simulation loop data points, and boundary `ENTER` / `EXIT` events.
+2. **`dummy_data_db`**:
+   - **`dummy_footprints`**: Contains generated dummy area footprints strictly bounded inside active geofences.
 
 ### Connecting with MongoDB Compass:
 1. Open **MongoDB Compass**.
-2. In the connection string field, paste:
+2. In the connection string field, paste your Atlas connection string from `.env`:
    ```
-   mongodb://localhost:27017
+   mongodb+srv://Nitin:fence@cluster0.7ulskib.mongodb.net/?retryWrites=true&w=majority
    ```
-   *(or your MongoDB Atlas connection string `mongodb+srv://...`)*
 3. Click **Connect**.
-4. You will see the **`virtual_fence`** database containing two primary collections:
-   - **`geofences`**: Contains all created shapes (Circle, Rectangle, Custom Polygon), boundary coordinates, colors, and configuration.
-   - **`footprints`**: Contains all real-time asset telemetry footprints, simulated data points, and mouse boundary `ENTER` / `EXIT` flag events.
-
-### Dual-Database Resilience:
-- If MongoDB is running, the server automatically connects and uses it as primary storage.
-- If MongoDB is momentarily stopped or disconnected, the backend seamlessly falls back to local SQLite (`geofences.db`), ensuring zero downtime.
+4. Both databases (`simulation_data_db` and `dummy_data_db`) and their collections are immediately visible.
 
 ---
 
