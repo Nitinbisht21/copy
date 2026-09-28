@@ -18,3 +18,15 @@ geofences.db
 *.log
 .DS_Store
 Thumbs.db
+
+# Local Tooling & Agent Skills
+.claude/
+.playwright-mcp/
+skills-lock.json
+
+# Video & Brag Output (Heavy render artifacts)
+**/brag-output*/
+brag-output/
+**/renders/
+**/.thumbnails/
+

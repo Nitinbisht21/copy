@@ -965,49 +965,7 @@ input:checked + .slider:before {
   color: #34d399;
 }
 
-.badge-type.flag {
-  background: rgba(245, 158, 11, 0.2);
-  color: #fbbf24;
-}
 
-.flag-pin-handle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: grab;
-}
-
-.flag-pin-handle:active {
-  cursor: grabbing;
-}
-
-.flag-icon-bubble {
-  width: 32px;
-  height: 32px;
-  border-radius: 50% 50% 50% 0;
-  transform: rotate(-45deg);
-  background: linear-gradient(135deg, #f59e0b, #d97706);
-  border: 2px solid #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 0 12px rgba(245, 158, 11, 0.6);
-}
-
-.flag-icon-bubble span {
-  transform: rotate(45deg);
-  font-size: 14px;
-}
-
-.flag-pulse-ring {
-  position: absolute;
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: 2px solid rgba(245, 158, 11, 0.5);
-  animation: radar-pulse 2s infinite ease-out;
-  pointer-events: none;
-}
 
 .badge-status {
   font-size: 0.65rem;
@@ -1692,6 +1650,7 @@ input:checked + .slider:before {
   padding: 0.35rem 0.45rem;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
+  border-left: 3.5px solid var(--color-primary);
   border-radius: var(--radius-sm);
   font-size: 0.72rem;
   animation: fadeIn 0.25s ease-out;
@@ -1738,6 +1697,31 @@ input:checked + .slider:before {
   margin-left: auto;
   font-family: var(--font-mono);
   font-size: 0.68rem;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.log-db-pill {
+  font-size: 0.58rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.log-db-pill.db-tag-sim {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+.log-db-pill.db-tag-dummy {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.3);
 }
 
 .log-fence {
@@ -1748,25 +1732,80 @@ input:checked + .slider:before {
   text-overflow: ellipsis;
 }
 
-/* Map Elements: Footprint Dots */
-.footprint-dot-icon {
-  background: transparent;
-  border: none;
+/* Map Elements: Footprint Dots & Custom Icons */
+.footprint-dot-icon,
+.footprint-icon-container {
+  background: transparent !important;
+  border: none !important;
+}
+
+.footprint-marker-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+}
+
+.footprint-pulse-ring {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  opacity: 0.7;
+  animation: footprintPulse 2.2s infinite ease-out;
+  pointer-events: none;
+}
+
+.footprint-icon-marker {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.4);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  z-index: 2;
+}
+
+.footprint-icon-marker:hover {
+  transform: scale(1.35);
+  box-shadow: 0 0 14px rgba(255, 255, 255, 0.8);
+}
+
+.footprint-icon-symbol {
+  display: block;
+  transform: translateY(-0.5px);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
 }
 
 .footprint-dot {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: #3b82f6;
   border: 1.5px solid #ffffff;
-  box-shadow: 0 0 6px rgba(59, 130, 246, 0.8);
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.8);
   animation: pulseDot 2s infinite;
+}
+
+@keyframes footprintPulse {
+  0% { transform: scale(0.6); opacity: 0.9; }
+  100% { transform: scale(2.2); opacity: 0; }
 }
 
 @keyframes pulseDot {
   0% { transform: scale(0.9); opacity: 0.8; }
-  50% { transform: scale(1.2); opacity: 1; }
+  50% { transform: scale(1.25); opacity: 1; }
   100% { transform: scale(0.9); opacity: 0.8; }
 }
 
