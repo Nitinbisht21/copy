@@ -1,8 +1,8 @@
 # Geofence Map Builder - Python Backend Requirements
 #
-# Supports both:
-#   1. MongoDB & MongoDB Compass (primary persistent database)
-#   2. Local SQLite (geofences.db) dual-fallback
+# Exclusively Powered by MongoDB & MongoDB Compass:
+#   - Database 1: simulation_data_db (geofences, simulation_footprints)
+#   - Database 2: dummy_data_db (dummy_footprints)
 #
 # To install:
 #   python -m venv venv
