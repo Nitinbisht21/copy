@@ -237,7 +237,7 @@
     name = 'Unnamed Geofence',
     type = GeofenceType.CIRCLE,
     coordinates = null,
-    radius = 0,
+    radius = 200,
     status = GeofenceStatus.ACTIVE,
     color = '#2563eb',
     description = ''
@@ -251,18 +251,21 @@
         console.warn('Failed to parse coordinates string in model:', e);
       }
     }
-    return {
+    const model = {
       id: id || `geo_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       name: (name || 'Unnamed Geofence').trim(),
       type,
       coordinates: safeCoords,
-      radius: (type === GeofenceType.CIRCLE) ? Number(radius) || 200 : undefined,
       status: status === GeofenceStatus.DISABLED ? GeofenceStatus.DISABLED : GeofenceStatus.ACTIVE,
       color,
       description: (description || '').trim(),
       created_at: now,
       updated_at: now
     };
+    if (type === GeofenceType.CIRCLE) {
+      model.radius = Number(radius) || 200;
+    }
+    return model;
   }
 
   /* ==========================================================================
@@ -609,8 +612,7 @@
     IDLE: 'idle',
     CIRCLE: 'circle',
     RECTANGLE: 'rectangle',
-    POLYGON: 'polygon',
-    EDITING: 'editing'
+    POLYGON: 'polygon'
   });
 
   class MapManager {
@@ -1497,20 +1499,32 @@
       const lng = Array.isArray(latlng) ? latlng[1] : latlng.lng;
       if (isNaN(lat) || isNaN(lng)) return;
 
+      const color = options.color || options.fenceColor || '#2563eb';
+
       const dotIcon = L.divIcon({
-        className: 'footprint-dot-icon',
-        html: '<div class="footprint-dot"></div>',
-        iconSize: [8, 8],
-        iconAnchor: [4, 4]
+        className: 'footprint-icon-container',
+        html: `
+          <div class="footprint-marker-wrap">
+            <div class="footprint-pulse-ring" style="border-color: ${color};"></div>
+            <div class="footprint-icon-marker" style="background-color: ${color}; box-shadow: 0 0 10px ${color};">
+              <span class="footprint-icon-symbol">👣</span>
+            </div>
+          </div>
+        `,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11]
       });
 
-      const marker = L.marker([lat, lng], { icon: dotIcon }).addTo(this.footprintsLayerGroup);
+      const marker = L.marker([lat, lng], { icon: dotIcon, zIndexOffset: 800 }).addTo(this.footprintsLayerGroup);
       if (options.device || options.fenceName) {
         marker.bindTooltip(`
           <div style="font-size: 0.72rem; font-family: monospace;">
-            <strong>👣 ${this.escapeHtml(options.device || 'Simulated Target')}</strong><br>
-            <span>Zone: ${this.escapeHtml(options.fenceName || 'Active Fence Area')}</span><br>
-            <span>${formatCoord(lat)}, ${formatCoord(lng)}</span>
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 2px;">
+              <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${color}; box-shadow: 0 0 4px ${color};"></span>
+              <strong>👣 ${this.escapeHtml(options.device || 'Simulated Target')}</strong>
+            </div>
+            <span>Zone: <strong>${this.escapeHtml(options.fenceName || 'Active Fence Area')}</strong></span><br>
+            <span style="color: var(--text-muted);">${formatCoord(lat)}, ${formatCoord(lng)}</span>
           </div>
         `, { sticky: true });
       }
@@ -1722,12 +1736,13 @@
       this.enterExploreMode();
       this.loadRecentFootprintsFromBackend();
       this.loadDatabaseStatus();
+      setInterval(() => this.loadDatabaseStatus(), 8000);
     }
 
     initElements() {
       this.dbStatusBadge = document.getElementById('db-status-badge');
       this.dbStatusText = document.getElementById('db-status-text');
-      this.compassUri = 'mongodb://localhost:27017';
+      this.compassUri = 'mongodb://localhost:27017/';
 
       this.modeButtons = document.querySelectorAll('[data-mode]');
       this.modeSections = {
@@ -3025,21 +3040,24 @@
           latitude: eventData.latlng.lat,
           longitude: eventData.latlng.lng,
           event: eventData.event,
+          color: eventData.fence.color,
           source: 'mouse_cross_fence'
         })
       })
       .then(res => res.json())
       .then(data => {
-        this.addFootprintToLogUI(data);
+        this.addFootprintToLogUI({ ...data, color: eventData.fence.color });
       })
       .catch(err => {
         console.warn('Telemetry footprint error:', err);
         this.addFootprintToLogUI({
           device_id: 'MOUSE_KEY',
           geofence_name: eventData.fence.name,
+          geofence_id: eventData.fence.id,
           latitude: eventData.latlng.lat,
           longitude: eventData.latlng.lng,
           event: eventData.event,
+          color: eventData.fence.color,
           created_at: new Date().toISOString()
         });
       });
@@ -3059,18 +3077,39 @@
       const emptyHint = this.footprintsLogList.querySelector('.empty-hint');
       if (emptyHint) emptyHint.remove();
 
+      let allottedColor = entry.color;
+      if (!allottedColor && entry.geofence_id) {
+        const f = this.store.getById(entry.geofence_id);
+        if (f) allottedColor = f.color;
+      }
+      if (!allottedColor && entry.geofence_name) {
+        const f = this.store.getAll().find(x => x.name === entry.geofence_name);
+        if (f) allottedColor = f.color;
+      }
+      if (!allottedColor) allottedColor = '#2563eb';
+
       const timeStr = entry.created_at ? new Date(entry.created_at).toLocaleTimeString() : new Date().toLocaleTimeString();
       const ev = (entry.event || 'INSIDE').toUpperCase();
       const eventClass = ev.toLowerCase();
       const flagEmoji = (ev === 'ENTER' || ev === 'EXIT') ? '🚩 ' : '👣 ';
 
+      const isDummy = entry.database === 'dummy_data_db' || entry.collection === 'dummy_footprints' || entry.source === 'area_dummy_generator' || String(entry.source || '').toLowerCase().includes('dummy');
+      const dbBadgeClass = isDummy ? 'db-tag-dummy' : 'db-tag-sim';
+      const dbBadgeText = isDummy ? 'DUMMY DB' : 'SIM DB';
+      const dbBadgeTitle = isDummy ? 'Stored in dummy_data_db (dummy_footprints collection)' : 'Stored in simulation_data_db (simulation_footprints collection)';
+
       const item = document.createElement('div');
       item.className = 'footprint-log-item';
+      item.style.borderLeftColor = allottedColor;
       item.innerHTML = `
         <div class="log-meta">
           <span class="log-time">${timeStr}</span>
           <span class="log-badge ${eventClass}">${flagEmoji}${ev}</span>
-          <span class="log-target">${this.escapeHtml(entry.device_id || 'TARGET')}</span>
+          <span class="log-db-pill ${dbBadgeClass}" title="${dbBadgeTitle}">${dbBadgeText}</span>
+          <span class="log-target">
+            <span class="log-color-pip" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${allottedColor};box-shadow:0 0 4px ${allottedColor};margin-right:4px;"></span>
+            ${this.escapeHtml(entry.device_id || 'TARGET')}
+          </span>
         </div>
         <div class="log-fence" title="${this.escapeHtml(entry.geofence_name || 'N/A')}">
           ${this.escapeHtml(entry.geofence_name || 'Active Area')}
@@ -3104,7 +3143,19 @@
               return;
             }
             // Reverse so prepend puts newest at top
-            [...rows].reverse().forEach(r => this.addFootprintToLogUI(r));
+            [...rows].reverse().forEach(r => {
+              const fence = this.store.getById(r.geofence_id) || this.store.getAll().find(f => f.name === r.geofence_name);
+              const allottedColor = r.color || (fence && fence.color) || '#2563eb';
+              this.addFootprintToLogUI({ ...r, color: allottedColor });
+              if (r.latitude && r.longitude) {
+                this.mapManager.renderFootprintPoint([r.latitude, r.longitude], {
+                  device: r.device_id,
+                  fenceName: r.geofence_name,
+                  color: allottedColor,
+                  fenceColor: allottedColor
+                });
+              }
+            });
           }
         })
         .catch(err => {
@@ -3132,11 +3183,15 @@
       .then(points => {
         if (Array.isArray(points) && points.length > 0) {
           points.forEach(fp => {
+            const fence = this.store.getById(fp.geofence_id) || (activeFences && activeFences.find(f => f.name === fp.geofence_name || f.id === fp.geofence_id));
+            const allottedColor = (fence && fence.color) || fp.color || '#2563eb';
             this.mapManager.renderFootprintPoint([fp.latitude, fp.longitude], {
               device: fp.device_id,
-              fenceName: fp.geofence_name
+              fenceName: fp.geofence_name,
+              color: allottedColor,
+              fenceColor: allottedColor
             });
-            this.addFootprintToLogUI(fp);
+            this.addFootprintToLogUI({ ...fp, color: allottedColor });
           });
           this.showToast(`👣 Generated ${points.length} dummy footprints inside area!`, 'success');
         } else {
@@ -3154,12 +3209,20 @@
       activeFences.slice(0, 5).forEach((fence, idx) => {
         const pt = generatePointInsideFence(fence);
         if (pt) {
-          this.mapManager.renderFootprintPoint(pt, { device: `LOCAL_ASSET_${idx + 1}`, fenceName: fence.name });
+          const allottedColor = fence.color || '#2563eb';
+          this.mapManager.renderFootprintPoint(pt, {
+            device: `LOCAL_ASSET_${idx + 1}`,
+            fenceName: fence.name,
+            color: allottedColor,
+            fenceColor: allottedColor
+          });
           this.addFootprintToLogUI({
             device_id: `LOCAL_ASSET_${idx + 1}`,
+            geofence_id: fence.id,
             geofence_name: fence.name,
             latitude: pt.lat,
             longitude: pt.lng,
+            color: allottedColor,
             event: 'INSIDE',
             created_at: new Date().toISOString()
           });
@@ -3268,8 +3331,14 @@
           }
 
           if (asset.coords) {
+            const allottedColor = fence.color || asset.color || '#2563eb';
             this.mapManager.updateSimulatedAsset(asset.id, asset.name, asset.coords, asset.color);
-            this.mapManager.renderFootprintPoint(asset.coords, { device: asset.name, fenceName: fence.name });
+            this.mapManager.renderFootprintPoint(asset.coords, {
+              device: asset.name,
+              fenceName: fence.name,
+              color: allottedColor,
+              fenceColor: fence.color
+            });
 
             // Post telemetry footprint
             fetch('/api/footprints', {
@@ -3282,11 +3351,12 @@
                 latitude: asset.coords.lat,
                 longitude: asset.coords.lng,
                 event: 'INSIDE',
+                color: allottedColor,
                 source: 'simulation_loop'
               })
             })
             .then(res => res.json())
-            .then(data => this.addFootprintToLogUI(data))
+            .then(data => this.addFootprintToLogUI({ ...data, color: allottedColor }))
             .catch(() => {});
           }
         });
@@ -3320,16 +3390,24 @@
         .then(data => {
           if (!this.dbStatusBadge || !this.dbStatusText) return;
           this.compassUri = data.compass_connection_string || data.mongodb_uri || 'mongodb://localhost:27017';
+          const simName = data.simulation_database || 'simulation_data_db';
+          const dummyName = data.dummy_database || 'dummy_data_db';
           if (data.mongodb_connected) {
             this.dbStatusBadge.classList.add('mongo-active');
             this.dbStatusBadge.classList.remove('sqlite-active');
-            this.dbStatusText.textContent = `MongoDB: ${data.mongodb_database}`;
-            this.dbStatusBadge.title = `MongoDB Compass Connected!\nURI: ${data.mongodb_uri}\nDatabase: ${data.mongodb_database}\nClick to copy Compass URI`;
+            this.dbStatusText.textContent = 'MongoDB: 2 DBs Connected';
+            this.dbStatusBadge.title = `MongoDB Compass Connected!\n` +
+              `1. Simulation DB (Live data): ${simName} (collections: geofences, simulation_footprints)\n` +
+              `2. Dummy DB (Generated): ${dummyName} (collection: dummy_footprints)\n` +
+              `URI: ${data.mongodb_uri}\nClick to copy Compass URI`;
           } else {
             this.dbStatusBadge.classList.add('sqlite-active');
             this.dbStatusBadge.classList.remove('mongo-active');
-            this.dbStatusText.textContent = 'SQLite (Compass Ready)';
-            this.dbStatusBadge.title = `Using SQLite local database.\nIn MongoDB Compass, connect to: ${this.compassUri}\nClick to copy Compass URI`;
+            this.dbStatusText.textContent = 'SQLite (Dual DB Tables)';
+            this.dbStatusBadge.title = `Using SQLite local dual-storage.\n` +
+              `1. Simulation table: simulation_footprints\n` +
+              `2. Dummy table: dummy_footprints\n` +
+              `In MongoDB Compass, connect to: ${this.compassUri}\nClick to copy Compass URI`;
           }
         })
         .catch(() => {});
