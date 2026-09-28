@@ -115,22 +115,109 @@ Open `http://localhost:5000` in your browser to access the Geofence Map Builder 
 
 ---
 
-## MongoDB Architecture & Collections
+## MongoDB Architecture & Live Database Models
 
-The application maintains data integrity by isolating real-time simulation/mouse tracking from generated dummy data across two dedicated MongoDB databases:
+The application exclusively uses your MongoDB Atlas Cluster:
+```
+mongodb+srv://Nitin:fence@cluster0.7ulskib.mongodb.net/?retryWrites=true&w=majority
+```
 
-### 1. `simulation_data_db` (Live Operations)
-- **`geofences`**: Contains all created shapes (Circle, Rectangle, Custom Polygon), sample perimeters, boundary coordinates, colors, and active statuses.
-- **`simulation_footprints`**: Contains real-time telemetry footprints, live 5-second simulation loop waypoints, and mouse pointer/click interactions:
-  - **`MOUSE_POINTER`**: Live mouse coordinate tracking and boundary `ENTER` / `EXIT` crossing flags.
-  - **`MOUSE_CLICK`**: Map click coordinates with geofence containment verification.
-  - **`Drone Alpha`, `Patrol 101`, `Scout 9`**: Active simulated asset movement.
+### Live Cluster Overview
 
-### 2. `dummy_data_db` (Dummy / Test Data)
-- **`dummy_footprints`**: Contains generated dummy movement sequences strictly isolated from live tracking:
-  - Initial seed data for demo assets (`SCOUT_UNIT_02`, `PATROL_ALPHA`).
-  - Contains complete lifecycle stages (`ENTER`, `INSIDE`, `EXIT`).
-  - Isolated from the live map canvas and queryable via dedicated API requests.
+| Database | Collection | Data Classification | Contents & Description |
+|---|---|---|---|
+| **`simulation_data_db`** | `geofences` | Persistent Config | Active perimeter shapes (`circle`, `rectangle`, `polygon`), coordinates, radii, and status. |
+| **`simulation_data_db`** | `simulation_footprints` | Real-time Stream | Live mouse movements (`MOUSE_POINTER`), map clicks (`MOUSE_CLICK`), and 5-sec simulation loop waypoints. |
+| **`dummy_data_db`** | `dummy_footprints` | Test & Simulation | Isolated dummy patrol asset tracking (`ENTER`, `INSIDE`, `EXIT`) generated inside active fences. |
+
+---
+
+### Database Document Schemas & Live Examples
+
+#### 1. `simulation_data_db` &rarr; Collection: `geofences`
+Stores geofence definitions created from the web builder:
+```json
+{
+  "id": "geo_demo_alpha",
+  "name": "Demo Alpha Perimeter",
+  "type": "circle",
+  "coordinates": {
+    "lat": 30.123456,
+    "lng": 78.123456
+  },
+  "radius": 320.0,
+  "status": "active",
+  "color": "#2563eb",
+  "description": "Auto-generated demo circular perimeter with real-time telemetry",
+  "created_at": "2026-09-28T12:00:00.000Z",
+  "updated_at": "2026-09-28T17:51:35.471669Z"
+}
+```
+
+#### 2. `simulation_data_db` &rarr; Collection: `simulation_footprints`
+Stores real-time mouse navigation telemetry and fence boundary alerts:
+```json
+{
+  "id": "fp_1790598105054_7ecbb6",
+  "device_id": "MOUSE_POINTER",
+  "geofence_id": "geo_demo_alpha",
+  "geofence_name": "Demo Alpha Perimeter",
+  "latitude": 30.1235,
+  "longitude": 78.1235,
+  "event": "ENTER",
+  "color": "#2563eb",
+  "source": "mouse_cross_fence",
+  "database": "simulation_data_db",
+  "collection": "simulation_footprints",
+  "created_at": "2026-09-28T17:51:45.054970Z"
+}
+```
+
+#### 3. `dummy_data_db` &rarr; Collection: `dummy_footprints`
+Stores patrol unit movements cycling through `ENTER`, `INSIDE`, and `EXIT` lifecycle states:
+```json
+[
+  {
+    "id": "fp_1790598099912_79a1f7",
+    "device_id": "FIELD_RANGER_7",
+    "geofence_id": "geo_demo_alpha",
+    "geofence_name": "Demo Alpha Perimeter",
+    "event": "ENTER",
+    "latitude": 30.124436,
+    "longitude": 78.126510,
+    "source": "area_dummy_generator",
+    "database": "dummy_data_db",
+    "collection": "dummy_footprints",
+    "created_at": "2026-09-28T17:51:39.912313Z"
+  },
+  {
+    "id": "fp_1790598099954_d13ab4",
+    "device_id": "FIELD_RANGER_7",
+    "geofence_id": "geo_demo_alpha",
+    "geofence_name": "Demo Alpha Perimeter",
+    "event": "INSIDE",
+    "latitude": 30.122012,
+    "longitude": 78.121891,
+    "source": "area_dummy_generator",
+    "database": "dummy_data_db",
+    "collection": "dummy_footprints",
+    "created_at": "2026-09-28T17:51:39.954725Z"
+  },
+  {
+    "id": "fp_1790598099997_528c66",
+    "device_id": "FIELD_RANGER_7",
+    "geofence_id": "geo_demo_alpha",
+    "geofence_name": "Demo Alpha Perimeter",
+    "event": "EXIT",
+    "latitude": 30.122263,
+    "longitude": 78.120360,
+    "source": "area_dummy_generator",
+    "database": "dummy_data_db",
+    "collection": "dummy_footprints",
+    "created_at": "2026-09-28T17:51:39.997063Z"
+  }
+]
+```
 
 ---
 
