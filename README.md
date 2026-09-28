@@ -238,19 +238,6 @@ Stores patrol unit movements cycling through `ENTER`, `INSIDE`, and `EXIT` lifec
 
 ---
 
-## Connecting with MongoDB Compass
-
-1. Open **MongoDB Compass**.
-2. In the connection string field, paste your Atlas connection string from `.env`:
-   ```
-   mongodb+srv://Nitin:fence@cluster0.7ulskib.mongodb.net/?retryWrites=true&w=majority
-   ```
-3. Click **Connect**.
-4. Both databases (`simulation_data_db` and `dummy_data_db`) and their collections are immediately visible.
-5. Click the circular **Refresh (⟳)** button in Compass at any time to see newly streamed events.
-
----
-
 ## REST API Reference
 
 | Method | Endpoint | Description |
