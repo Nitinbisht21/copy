@@ -1867,6 +1867,7 @@ input:checked + .slider:before {
 .simulated-asset-icon {
   background: transparent;
   border: none;
+  transition: transform 0.8s ease-out;
 }
 
 .asset-marker-bubble {

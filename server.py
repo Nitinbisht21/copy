@@ -861,8 +861,8 @@ def generate_dummy_movement_sequence(fence, device_id):
         d_lng_in = (r_in * math.sin(theta_inside)) / (111320.0 * math.cos(math.radians(center_lat)))
         inside_pt = {'lat': round(center_lat + d_lat_in, 6), 'lng': round(center_lng + d_lng_in, 6)}
 
-        # 3. EXIT: Crossing boundary out
-        r_exit = radius * 1.02
+        # 3. EXIT: Crossing clearly outside fence boundary
+        r_exit = radius * 1.08
         d_lat_ex = (r_exit * math.cos(theta_exit)) / 111320.0
         d_lng_ex = (r_exit * math.sin(theta_exit)) / (111320.0 * math.cos(math.radians(center_lat)))
         exit_pt = {'lat': round(center_lat + d_lat_ex, 6), 'lng': round(center_lng + d_lng_ex, 6)}
@@ -877,18 +877,18 @@ def generate_dummy_movement_sequence(fence, device_id):
 
         # 1. ENTER: on west edge
         enter_pt = {
-            'lat': round(south + lat_span * (0.2 + 0.6 * random.random()), 6),
-            'lng': round(west + lng_span * 0.02, 6)
+            'lat': round(south + lat_span * 0.45, 6),
+            'lng': round(west + lng_span * 0.01, 6)
         }
         # 2. INSIDE: center
         inside_pt = {
-            'lat': round(south + lat_span * (0.35 + 0.3 * random.random()), 6),
-            'lng': round(west + lng_span * (0.35 + 0.3 * random.random()), 6)
+            'lat': round(south + lat_span * 0.50, 6),
+            'lng': round(west + lng_span * 0.50, 6)
         }
-        # 3. EXIT: on east edge
+        # 3. EXIT: clearly outside east edge
         exit_pt = {
-            'lat': round(south + lat_span * (0.2 + 0.6 * random.random()), 6),
-            'lng': round(east + lng_span * 0.02, 6)
+            'lat': round(south + lat_span * 0.55, 6),
+            'lng': round(east + lng_span * 0.05, 6)
         }
 
     elif ftype == 'polygon':
@@ -903,10 +903,12 @@ def generate_dummy_movement_sequence(fence, device_id):
             avg_lng = sum(p[1] for p in pts) / len(pts)
             inside_pt = {'lat': round(avg_lat, 6), 'lng': round(avg_lng, 6)}
 
-            # 3. EXIT on opposite edge
+            # 3. EXIT 25m outside opposite edge
             mid_idx = len(pts) // 2
             pe1, pe2 = pts[mid_idx], pts[(mid_idx + 1) % len(pts)]
-            exit_pt = {'lat': round(pe1[0] + (pe2[0] - pe1[0]) * 0.5, 6), 'lng': round(pe1[1] + (pe2[1] - pe1[1]) * 0.5, 6)}
+            d_lat_out = ((pe1[0] + pe2[0]) / 2) + (25.0 / 111320.0)
+            d_lng_out = ((pe1[1] + pe2[1]) / 2) + (25.0 / (111320.0 * math.cos(math.radians(pe1[0]))))
+            exit_pt = {'lat': round(d_lat_out, 6), 'lng': round(d_lng_out, 6)}
 
     if not enter_pt or not inside_pt or not exit_pt:
         return []
