@@ -25,6 +25,7 @@ A comprehensive operational manual and technical guide for configuring, managing
    - [Inspecting Data in MongoDB Compass](#inspecting-data-in-mongodb-compass)
 9. [Data Management & GeoJSON Integration](#9-data-management--geojson-integration)
 10. [Troubleshooting & FAQ](#10-troubleshooting--faq)
+11. [Deploying to Vercel (1-Click Guide)](#11-deploying-to-vercel-1-click-guide)
 
 ---
 
@@ -385,3 +386,46 @@ Click **🎯 Sample Fences** to instantly populate the map with three pre-config
 ### Q: The map shows "Offline / In-Memory Mode" instead of MongoDB.
 - Verify that your MongoDB Atlas cluster IP access list allows connections from your current IP address (in the Atlas web console, go to **Network Access &rarr; Add IP Address &rarr; Allow Access from Anywhere `0.0.0.0/0`** for testing).
 - Ensure your `.env` contains the correct connection string.
+
+---
+
+## 11. Deploying to Vercel (1-Click Guide)
+
+This application is fully pre-configured for instant deployment on [Vercel](https://vercel.com) using Vercel's Python Serverless Runtime + Edge Static Delivery.
+
+### Step 1: Allow Vercel Dynamic IPs in MongoDB Atlas
+Because Vercel Serverless Functions execute on dynamic IP addresses, you must allow Atlas network traffic from anywhere:
+1. Log in to [cloud.mongodb.com](https://cloud.mongodb.com).
+2. In the left navigation, click **Network Access** (under Security).
+3. Click **+ Add IP Address**.
+4. Click **Allow Access from Anywhere** (`0.0.0.0/0`).
+5. Click **Confirm**.
+
+### Step 2: Push Your Code to GitHub
+Ensure all code and configuration files (`api/index.py`, `vercel.json`, `requirements.txt`) are committed and pushed to your GitHub repository:
+```bash
+git add .
+git commit -m "feat: configure Vercel serverless deployment"
+git push origin main
+```
+
+### Step 3: Import Project into Vercel
+1. Go to [vercel.com](https://vercel.com) and log in with your GitHub account.
+2. From the Vercel dashboard, click **Add New...** &rarr; **Project**.
+3. Locate your repository (`virtual_fence`) and click **Import**.
+4. Leave **Framework Preset** as **Other** (Vercel automatically detects `vercel.json` and `api/index.py`).
+5. Leave **Root Directory** as `./`.
+
+### Step 4: Add Environment Variables
+Under **Environment Variables**, add the following keys:
+| Key | Recommended Value | Note |
+|---|---|---|
+| `MONGODB_URI` | `mongodb+srv://<user>:<password>@cluster0...mongodb.net/?retryWrites=true&w=majority` | Your Atlas connection string |
+| `MONGODB_SIMULATION_DB` | `simulation_data_db` | Live mouse, telemetry & geofence collection |
+| `MONGODB_DUMMY_DB` | `dummy_data_db` | Multi-asset simulated flag collection |
+
+### Step 5: Click Deploy
+1. Click the blue **Deploy** button.
+2. Vercel will install dependencies from `requirements.txt`, bundle static assets (`index.html`, `css/`, `js/`), and compile the Python serverless entrypoint.
+3. Within 60 seconds, your application will be live at `https://<your-project-name>.vercel.app`!
+

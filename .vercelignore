@@ -1,0 +1,16 @@
+.git
+.github
+venv/
+env/
+ENV/
+.env
+__pycache__/
+*.pyc
+*.pyo
+.agents/
+.gemini/
+.claude/
+.playwright-mcp/
+brag-output/
+**/brag-output*/
+**/renders/

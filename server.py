@@ -256,6 +256,13 @@ def init_mongo_connection(silent=False):
             print(f">> [MongoDB Error] {mongo_connection_error}")
         return False
 
+    if use_mongodb and mongo_client is not None:
+        try:
+            mongo_client.admin.command('ping')
+            return True
+        except Exception:
+            use_mongodb = False
+
     candidates = [MONGODB_URI]
     if '://Nitin:' in MONGODB_URI:
         candidates.append(MONGODB_URI.replace('://Nitin:', '://nitin:'))
@@ -308,8 +315,15 @@ def init_mongo_connection(silent=False):
         print(f">> [MongoDB Notice] Ensure MongoDB Compass or mongod is running at: {MONGODB_URI}")
     return False
 
+heartbeat_started = False
+
 def start_mongo_heartbeat():
     """Background reconnect daemon to maintain persistent connection to MongoDB."""
+    global heartbeat_started
+    if heartbeat_started or os.environ.get('VERCEL'):
+        return
+    heartbeat_started = True
+
     def heartbeat_loop():
         while True:
             time.sleep(8)
@@ -322,8 +336,10 @@ def start_mongo_heartbeat():
 
 def init_db():
     """Sole database initializer: Connects exclusively to MongoDB."""
-    init_mongo_connection()
-    start_mongo_heartbeat()
+    if not use_mongodb or mongo_client is None:
+        init_mongo_connection()
+    if not os.environ.get('VERCEL'):
+        start_mongo_heartbeat()
 
 # -----------------------------------------------------------------------------
 # SPATIAL MATHEMATICS ENGINE
@@ -983,8 +999,9 @@ def generate_dummy_footprints_in_area(count=5, specific_fence_id=None, client_fe
 # ENGINE 1: FLASK WEB ENGINE
 # -----------------------------------------------------------------------------
 
-def run_flask():
+def create_app():
     from flask import Flask, request, jsonify, send_from_directory
+    init_db()
     app = Flask(__name__, static_folder='.', static_url_path='')
 
     @app.after_request
@@ -995,65 +1012,78 @@ def run_flask():
         return resp
 
     @app.route('/api/geofences', methods=['GET'])
+    @app.route('/geofences', methods=['GET'])
     def api_get():
         return jsonify(db_list_geofences())
 
     @app.route('/api/geofences', methods=['POST'])
+    @app.route('/geofences', methods=['POST'])
     def api_post():
         data = request.get_json(force=True)
         return jsonify(db_create_geofence(data)), 201
 
     @app.route('/api/geofences/sample', methods=['POST'])
+    @app.route('/geofences/sample', methods=['POST'])
     def api_seed_sample():
         """Seeds and restores sample demo geofences directly in MongoDB."""
         return jsonify(db_seed_sample_geofences()), 201
 
     @app.route('/api/geofences/<fid>', methods=['PUT'])
+    @app.route('/geofences/<fid>', methods=['PUT'])
     def api_put(fid):
         data = request.get_json(force=True)
         res = db_update_geofence(fid, data)
         return jsonify(res) if res else (jsonify({'error': 'Not found'}), 404)
 
     @app.route('/api/geofences/<fid>', methods=['DELETE'])
+    @app.route('/geofences/<fid>', methods=['DELETE'])
     def api_del(fid):
         return jsonify({'success': True}) if db_delete_geofence(fid) else (jsonify({'error': 'Not found'}), 404)
 
     @app.route('/api/geofences/<fid>/toggle', methods=['POST'])
+    @app.route('/geofences/<fid>/toggle', methods=['POST'])
     def api_tog(fid):
         res = db_toggle_geofence(fid)
         return jsonify(res) if res else (jsonify({'error': 'Not found'}), 404)
 
     @app.route('/api/geofences', methods=['DELETE'])
+    @app.route('/geofences', methods=['DELETE'])
     def api_clear():
         db_clear_all()
         return jsonify({'success': True})
 
     @app.route('/api/geofences/export', methods=['GET'])
+    @app.route('/geofences/export', methods=['GET'])
     def api_export():
         return jsonify(db_export_geojson())
 
     @app.route('/api/telemetry/evaluate', methods=['POST'])
+    @app.route('/telemetry/evaluate', methods=['POST'])
     def api_telemetry():
         data = request.get_json(force=True)
         return jsonify(evaluate_telemetry(data))
 
     @app.route('/api/footprints', methods=['GET'])
+    @app.route('/footprints', methods=['GET'])
     def api_get_footprints():
         limit = request.args.get('limit', 50)
         target = request.args.get('target', 'all')
         return jsonify(db_list_footprints(limit, target))
 
     @app.route('/api/footprints', methods=['POST'])
+    @app.route('/footprints', methods=['POST'])
     def api_post_footprint():
         data = request.get_json(force=True)
         return jsonify(db_record_footprint(data)), 201
 
     @app.route('/api/footprints', methods=['DELETE'])
+    @app.route('/footprints', methods=['DELETE'])
     def api_delete_footprints():
         db_clear_footprints()
         return jsonify({'success': True})
 
     @app.route('/api/simulation/generate', methods=['POST'])
+    @app.route('/simulation/generate', methods=['POST'])
     def api_generate_dummy():
         data = request.get_json(force=True) or {}
         count = data.get('count', 3)
@@ -1063,6 +1093,7 @@ def run_flask():
         return jsonify(records)
 
     @app.route('/api/database/status', methods=['GET'])
+    @app.route('/database/status', methods=['GET'])
     def api_db_status():
         if not use_mongodb:
             init_mongo_connection(silent=True)
@@ -1076,6 +1107,10 @@ def run_flask():
     def files(p):
         return send_from_directory('.', p)
 
+    return app
+
+def run_flask():
+    app = create_app()
     app.run(host='0.0.0.0', port=PORT, debug=False)
 
 # -----------------------------------------------------------------------------
