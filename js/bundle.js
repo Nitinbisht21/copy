@@ -2758,6 +2758,14 @@
         this.mapManager.renderSavedGeofences(this.store.getAll(), savedFence.id);
         this.mapManager.zoomToGeofence(savedFence);
         this.updateDetailsPanel(savedFence);
+        if (this.simulationRunning) {
+          this.simulatedAssets.forEach(a => {
+            a.coords = null;
+            a.insideFences = new Set();
+            a.outsideSteps = 0;
+            a.targetFenceId = null;
+          });
+        }
       }
 
       this.enterExploreMode(false);
@@ -3339,10 +3347,18 @@
           }
         }
 
+        // Clear previous simulation state so all assets stage cleanly outside the active fence
+        this.simulatedAssets.forEach(a => {
+          a.coords = null;
+          a.insideFences = new Set();
+          a.outsideSteps = 0;
+          a.targetFenceId = null;
+        });
+
         this.simulationRunning = true;
         if (this.btnSimulationIcon) this.btnSimulationIcon.textContent = '⏸';
         if (this.btnSimulationText) this.btnSimulationText.textContent = 'Pause Simulation';
-        this.showToast('▶ Live Simulation Started: Assets moving inside fence area.', 'success');
+        this.showToast('▶ Live Simulation Started: Assets entering and patrolling fence area.', 'success');
 
         this.startSimulationLoop();
       }
@@ -3351,7 +3367,7 @@
     startSimulationLoop() {
       if (this.simulationTimer) clearInterval(this.simulationTimer);
 
-      function getGeofenceCenterAndRadius(fence) {
+      const getGeofenceCenterAndRadius = (fence) => {
         let coords = fence.coordinates;
         if (typeof coords === 'string') {
           try { coords = JSON.parse(coords); } catch (e) {}
@@ -3379,30 +3395,42 @@
           if (Array.isArray(pts) && pts.length >= 3) {
             const avgLat = pts.reduce((acc, p) => acc + p[0], 0) / pts.length;
             const avgLng = pts.reduce((acc, p) => acc + p[1], 0) / pts.length;
-            return { center: { lat: avgLat, lng: avgLng }, radius: 250 };
+            const maxDist = Math.max(...pts.map(p => haversineDistance(avgLat, avgLng, p[0], p[1])));
+            return { center: { lat: avgLat, lng: avgLng }, radius: Math.max(80, maxDist) };
           }
         }
         return { center: { lat: 30.123456, lng: 78.123456 }, radius: 200 };
-      }
+      };
 
       const stepSimulation = () => {
         if (!this.simulationRunning) return;
         const activeFences = this.store.getActiveGeofences();
         if (!activeFences || activeFences.length === 0) return;
 
+        // Target the active fence currently selected, or newest active fence
+        const selected = this.store.getSelected();
+        const primaryFence = (selected && selected.status === 'active') ? selected : activeFences[activeFences.length - 1];
+        if (!primaryFence) return;
+        const fenceMeta = getGeofenceCenterAndRadius(primaryFence);
+
         this.simulatedAssets.forEach((asset, idx) => {
-          const assignedFence = activeFences[idx % activeFences.length];
-          const fenceMeta = getGeofenceCenterAndRadius(assignedFence);
           if (!asset.insideFences) asset.insideFences = new Set();
 
-          // 1. Initial placement if asset has no coordinates yet
-          if (!asset.coords) {
+          // 1. Initial staged placement strictly outside perimeter
+          if (!asset.coords || asset.targetFenceId !== primaryFence.id) {
+            asset.targetFenceId = primaryFence.id;
+            asset.outsideSteps = 0;
+
             const latRad0 = (fenceMeta.center.lat * Math.PI) / 180.0;
-            const initAngle = (idx * (2 * Math.PI / 3)) + 0.35;
-            // Asset 0 starts outside (1.18x radius) heading inwards
-            // Asset 1 starts inside (0.60x radius) heading outwards
-            // Asset 2 starts outside (1.18x radius) heading inwards
-            const startDist = (idx === 1) ? fenceMeta.radius * 0.60 : fenceMeta.radius * 1.18;
+            // 3 distinct approach angles separated by ~120 degrees:
+            // Drone Alpha (idx 0): North (-PI/2)
+            // Patrol 101  (idx 1): South-East (PI/6)
+            // Scout 9     (idx 2): West (PI)
+            const entryAngles = [-Math.PI / 2, Math.PI / 6, Math.PI];
+            const initAngle = entryAngles[idx % entryAngles.length];
+
+            // Staged strictly outside the boundary (radius + 10m to 14m)
+            const startDist = fenceMeta.radius + 10 + (idx * 2);
             const dLat0 = (startDist * Math.cos(initAngle)) / 111320.0;
             const dLng0 = (startDist * Math.sin(initAngle)) / (111320.0 * Math.cos(latRad0));
 
@@ -3410,25 +3438,16 @@
               lat: Number((fenceMeta.center.lat + dLat0).toFixed(6)),
               lng: Number((fenceMeta.center.lng + dLng0).toFixed(6))
             };
-            asset.speed = 18 + (idx * 4); // 18m, 22m, 26m per step
+            asset.speed = 18 + (idx * 3); // 18m, 21m, 24m per step
 
-            if (startDist > fenceMeta.radius) {
-              // Heading directly towards fence center so it crosses in
-              asset.heading = Math.atan2(
-                (fenceMeta.center.lng - asset.coords.lng) * Math.cos(latRad0),
-                (fenceMeta.center.lat - asset.coords.lat)
-              );
-            } else {
-              // Heading outwards across the boundary
-              asset.heading = initAngle + (Math.random() - 0.5) * 0.2;
-            }
+            // Aim heading straight at fence center so next step crosses into the perimeter
+            asset.heading = Math.atan2(
+              (fenceMeta.center.lng - asset.coords.lng) * Math.cos(latRad0),
+              (fenceMeta.center.lat - asset.coords.lat)
+            );
 
+            // Crucial: Clear insideFences so perimeter entry triggers ENTER flag
             asset.insideFences = new Set();
-            for (const f of activeFences) {
-              if (isPointInGeofence(asset.coords, f)) {
-                asset.insideFences.add(f.id);
-              }
-            }
           }
 
           // 2. Realistic forward step along current heading
@@ -3442,7 +3461,7 @@
             lng: Number((asset.coords.lng + dLng).toFixed(6))
           };
 
-          // 3. Dynamic Boundary Evaluation (EXACTLY like the mouse)
+          // 3. Dynamic Boundary Evaluation
           const nowInside = new Set();
           let insideFenceObj = null;
           for (const fence of activeFences) {
@@ -3481,27 +3500,25 @@
               transitionFence = insideFenceObj;
             } else {
               ev = 'OUTSIDE';
-              transitionFence = assignedFence;
+              transitionFence = primaryFence;
             }
           }
 
           // 4. Steer realistic heading for next step
           if (nowInside.size > 0) {
             asset.outsideSteps = 0;
-            // Smooth wandering curve while cruising inside
-            asset.heading += (Math.random() - 0.5) * 0.35;
+            // Gentle wandering drift while cruising across fence interior
+            asset.heading += (Math.random() - 0.5) * 0.12;
           } else {
             asset.outsideSteps = (asset.outsideSteps || 0) + 1;
-            // After 2 steps outside (~40m outside fence), steer back toward fence center!
+            // After crossing outside (~25-40m outside fence), steer back toward fence center!
             if (asset.outsideSteps >= 2) {
               const targetAngle = Math.atan2(
                 (fenceMeta.center.lng - nextCoords.lng) * Math.cos(latRad),
                 (fenceMeta.center.lat - nextCoords.lat)
               );
-              asset.heading = targetAngle + (Math.random() - 0.5) * 0.25;
+              asset.heading = targetAngle + (Math.random() - 0.5) * 0.15;
               asset.outsideSteps = 0;
-            } else {
-              asset.heading += (Math.random() - 0.5) * 0.2;
             }
           }
 
@@ -3583,6 +3600,7 @@
         a.coords = null;
         a.insideFences = new Set();
         a.outsideSteps = 0;
+        a.targetFenceId = null;
       });
       if (this.footprintsLogList) {
         this.footprintsLogList.innerHTML = '<div class="empty-hint" style="font-size: 0.74rem;">Logs and footprints cleared.</div>';
