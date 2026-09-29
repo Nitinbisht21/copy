@@ -94,7 +94,7 @@ pip install -r requirements.txt
 
 Create a `.env` file in the project root (or edit existing):
 ```env
-MONGODB_URI=mongodb+srv://<username>:<password>@cluster0.7ulskib.mongodb.net/?retryWrites=true&w=majority
+MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-url>.mongodb.net/?retryWrites=true&w=majority
 MONGODB_SIMULATION_DB=simulation_data_db
 MONGODB_DUMMY_DB=dummy_data_db
 PORT=5000
@@ -117,9 +117,9 @@ Open `http://localhost:5000` in your browser to access the Geofence Map Builder 
 
 ## MongoDB Architecture & Live Database Models
 
-The application exclusively uses your MongoDB Atlas Cluster:
-```
-mongodb+srv://Nitin:fence@cluster0.7ulskib.mongodb.net/?retryWrites=true&w=majority
+The application connects to your MongoDB cluster via the URI specified in your private `.env` file:
+```env
+MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-url>.mongodb.net/?retryWrites=true&w=majority
 ```
 
 ### Live Cluster Overview

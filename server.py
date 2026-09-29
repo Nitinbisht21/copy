@@ -70,7 +70,7 @@ except ImportError:
 PORT = int(os.environ.get('PORT', 5000))
 MONGODB_URI = os.environ.get(
     'MONGODB_URI',
-    'mongodb+srv://Nitin:fence@cluster0.7ulskib.mongodb.net/?retryWrites=true&w=majority'
+    'mongodb://localhost:27017'
 )
 MONGODB_SIMULATION_DB = os.environ.get('MONGODB_SIMULATION_DB', 'simulation_data_db')
 MONGODB_DUMMY_DB = os.environ.get('MONGODB_DUMMY_DB', 'dummy_data_db')
