@@ -1479,16 +1479,18 @@
       this.onFlagGenerated({ event: type, fence, latlng: pt, timestamp: new Date() });
     }
 
-    generateFlagMarker(type, fence, pt) {
+    generateFlagMarker(type, fence, pt, device = 'Mouse') {
       if (!this.flagMarkersLayerGroup) return;
       const isEnter = type === 'ENTER';
       const flagColor = isEnter ? '#10b981' : '#ef4444';
+      const fenceName = fence ? (fence.name || 'Geofence') : 'Geofence';
+      const entityLabel = device ? `${device} - ${fenceName}` : fenceName;
       const flagHtml = `
         <div class="generated-flag-marker ${isEnter ? 'flag-enter' : 'flag-exit'}">
           <div class="flag-radar-pulse"></div>
           <div class="flag-pin-bubble" style="background-color: ${flagColor};">
             <span>🚩</span>
-            <span>${type}: ${this.escapeHtml(fence.name)}</span>
+            <span>${type}: ${this.escapeHtml(entityLabel)}</span>
           </div>
         </div>
       `;
@@ -1496,17 +1498,18 @@
       const flagIcon = L.divIcon({
         className: 'custom-generated-flag',
         html: flagHtml,
-        iconSize: [140, 36],
-        iconAnchor: [18, 30]
+        iconSize: [160, 36],
+        iconAnchor: [20, 30]
       });
 
       const marker = L.marker([pt.lat, pt.lng], { icon: flagIcon, zIndexOffset: 2000 }).addTo(this.flagMarkersLayerGroup);
       marker.bindPopup(`
         <div style="font-family: inherit; font-size: 0.8rem; line-height: 1.4;">
           <strong style="color: ${flagColor};">🚩 GEOFENCE ${type} FLAG GENERATED</strong><br>
-          <strong>Fence:</strong> ${this.escapeHtml(fence.name)}<br>
+          <strong>Fence:</strong> ${this.escapeHtml(fenceName)}<br>
+          <strong>Entity:</strong> ${this.escapeHtml(device || 'Unknown')}<br>
           <strong>Coordinates:</strong> ${formatCoord(pt.lat)}, ${formatCoord(pt.lng)}<br>
-          <strong>Trigger:</strong> Mouse Cross-Fence Boundary
+          <strong>Trigger:</strong> ${isEnter ? 'Perimeter Boundary Entry' : 'Crossed Out of Fence Perimeter'}
         </div>
       `);
     }
@@ -3196,7 +3199,7 @@
 
               if (ev === 'ENTER' || ev === 'EXIT') {
                 if (this.mapManager && this.mapManager.showFlagsOnMap) {
-                  this.mapManager.generateFlagMarker(ev, fence || { name: r.geofence_name, color: allottedColor }, { lat: r.latitude, lng: r.longitude });
+                  this.mapManager.generateFlagMarker(ev, fence || { name: r.geofence_name, color: allottedColor }, { lat: r.latitude, lng: r.longitude }, r.device_id);
                 }
               } else {
                 if (r.latitude && r.longitude && this.mapManager && this.mapManager.showFootprintsOnMap) {
@@ -3244,12 +3247,17 @@
             if (ev === 'ENTER') {
               enterCount++;
               if (this.mapManager && this.mapManager.showFlagsOnMap) {
-                this.mapManager.generateFlagMarker('ENTER', fence || { name: fp.geofence_name, color: allottedColor }, { lat: fp.latitude, lng: fp.longitude });
+                this.mapManager.flagCount++;
+                if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
+                this.mapManager.generateFlagMarker('ENTER', fence || { name: fp.geofence_name, color: allottedColor }, { lat: fp.latitude, lng: fp.longitude }, fp.device_id || 'Dummy Asset');
               }
             } else if (ev === 'EXIT') {
               exitCount++;
               if (this.mapManager && this.mapManager.showFlagsOnMap) {
-                this.mapManager.generateFlagMarker('EXIT', fence || { name: fp.geofence_name, color: allottedColor }, { lat: fp.latitude, lng: fp.longitude });
+                this.mapManager.flagCount++;
+                if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
+                this.mapManager.generateFlagMarker('EXIT', fence || { name: fp.geofence_name, color: allottedColor }, { lat: fp.latitude, lng: fp.longitude }, fp.device_id || 'Dummy Asset');
+                this.showToast(`🚩 Flag Generated: ${fp.device_id || 'Dummy Asset'} EXITED "${(fence && fence.name) || fp.geofence_name}"`, 'warning');
               }
             } else {
               insideCount++;
@@ -3426,7 +3434,12 @@
             // If boundary crossing (ENTER/EXIT), place radar flag marker on map
             if (ev === 'ENTER' || ev === 'EXIT') {
               if (this.mapManager && this.mapManager.showFlagsOnMap) {
-                this.mapManager.generateFlagMarker(ev, fence, asset.coords);
+                this.mapManager.flagCount++;
+                if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
+                this.mapManager.generateFlagMarker(ev, fence, asset.coords, asset.name);
+                if (ev === 'EXIT') {
+                  this.showToast(`🚩 Flag Generated: ${asset.name} EXITED "${fence.name}"`, 'warning');
+                }
               }
             } else {
               // INSIDE waypoint footprint dot
@@ -3463,8 +3476,8 @@
       };
 
       stepSimulation();
-      // 5-second simulation refresh rate
-      this.simulationTimer = setInterval(stepSimulation, 5000);
+      // 3-second simulation refresh rate
+      this.simulationTimer = setInterval(stepSimulation, 3000);
     }
 
     clearAllFootprints() {

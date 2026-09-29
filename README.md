@@ -24,8 +24,8 @@ A modern, high-performance geofence management system and map builder with an in
   - Great-Circle Haversine distance for circular boundaries
   - Bounding box containment tests
   - Real-time geodesic perimeter and surface area metrics
-- **5-Second Asset Simulation Engine**:
-  - Assets (`Drone Alpha`, `Patrol 101`, `Scout 9`) dynamically transition every 5 seconds through a 4-stage lifecycle:
+- **3-Second Asset Simulation Engine**:
+  - Assets (`Drone Alpha`, `Patrol 101`, `Scout 9`) dynamically transition every 3 seconds through a 4-stage lifecycle:
     - **`ENTER`**: Boundary perimeter entry &rarr; renders green radar flag on map &rarr; records to MongoDB.
     - **`INSIDE`**: Interior waypoints &rarr; plots footprint breadcrumb &rarr; records to MongoDB.
     - **`EXIT`**: Boundary perimeter exit &rarr; renders red radar flag on map &rarr; records to MongoDB.
@@ -127,7 +127,7 @@ mongodb+srv://Nitin:fence@cluster0.7ulskib.mongodb.net/?retryWrites=true&w=major
 | Database | Collection | Data Classification | Contents & Description |
 |---|---|---|---|
 | **`simulation_data_db`** | `geofences` | Persistent Config | Active perimeter shapes (`circle`, `rectangle`, `polygon`), coordinates, radii, and status. |
-| **`simulation_data_db`** | `simulation_footprints` | Real-time Stream | Live mouse movements (`MOUSE_POINTER`), map clicks (`MOUSE_CLICK`), and 5-sec simulation loop waypoints. |
+| **`simulation_data_db`** | `simulation_footprints` | Real-time Stream | Live mouse movements (`MOUSE_POINTER`), map clicks (`MOUSE_CLICK`), and 3-sec simulation loop waypoints. |
 | **`dummy_data_db`** | `dummy_footprints` | Test & Simulation | Isolated dummy patrol asset tracking (`ENTER`, `INSIDE`, `EXIT`) generated inside active fences. |
 
 ---
