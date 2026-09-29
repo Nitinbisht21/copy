@@ -1480,6 +1480,9 @@
     }
 
     generateFlagMarker(type, fence, pt, device = 'Mouse') {
+      if (!this.showFlagsOnMap) {
+        return null; // When flag option is OFF, don't show the flag on the fence/map
+      }
       if (!this.flagMarkersLayerGroup) {
         this.flagMarkersLayerGroup = L.layerGroup().addTo(this.map);
       }
@@ -1598,19 +1601,23 @@
     }
 
     setLayerVisibility(type, visible) {
-      if (type === 'footprints' && this.footprintsLayerGroup) {
+      if (type === 'footprints') {
         this.showFootprintsOnMap = visible;
-        if (visible) {
-          if (!this.map.hasLayer(this.footprintsLayerGroup)) this.map.addLayer(this.footprintsLayerGroup);
-        } else {
-          if (this.map.hasLayer(this.footprintsLayerGroup)) this.map.removeLayer(this.footprintsLayerGroup);
+        if (this.footprintsLayerGroup) {
+          if (visible) {
+            if (!this.map.hasLayer(this.footprintsLayerGroup)) this.map.addLayer(this.footprintsLayerGroup);
+          } else {
+            if (this.map.hasLayer(this.footprintsLayerGroup)) this.map.removeLayer(this.footprintsLayerGroup);
+          }
         }
-      } else if (type === 'flags' && this.flagMarkersLayerGroup) {
+      } else if (type === 'flags') {
         this.showFlagsOnMap = visible;
-        if (visible) {
-          if (!this.map.hasLayer(this.flagMarkersLayerGroup)) this.map.addLayer(this.flagMarkersLayerGroup);
-        } else {
-          if (this.map.hasLayer(this.flagMarkersLayerGroup)) this.map.removeLayer(this.flagMarkersLayerGroup);
+        if (this.flagMarkersLayerGroup) {
+          if (visible) {
+            if (!this.map.hasLayer(this.flagMarkersLayerGroup)) this.map.addLayer(this.flagMarkersLayerGroup);
+          } else {
+            if (this.map.hasLayer(this.flagMarkersLayerGroup)) this.map.removeLayer(this.flagMarkersLayerGroup);
+          }
         }
       }
     }
@@ -3251,17 +3258,22 @@
 
             if (ev === 'ENTER') {
               enterCount++;
-              if (this.mapManager && this.mapManager.showFlagsOnMap) {
+              if (this.mapManager) {
                 this.mapManager.flagCount++;
                 if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
-                this.mapManager.generateFlagMarker('ENTER', fence || { name: fp.geofence_name, color: allottedColor }, { lat: fp.latitude, lng: fp.longitude }, fp.device_id || 'Dummy Asset');
+                if (this.mapManager.showFlagsOnMap) {
+                  this.mapManager.generateFlagMarker('ENTER', fence || { name: fp.geofence_name, color: allottedColor }, { lat: fp.latitude, lng: fp.longitude }, fp.device_id || 'Dummy Asset');
+                }
+                this.showToast(`🚩 Flag Generated: ${fp.device_id || 'Dummy Asset'} ENTERED "${(fence && fence.name) || fp.geofence_name}"`, 'success');
               }
             } else if (ev === 'EXIT') {
               exitCount++;
-              if (this.mapManager && this.mapManager.showFlagsOnMap) {
+              if (this.mapManager) {
                 this.mapManager.flagCount++;
                 if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
-                this.mapManager.generateFlagMarker('EXIT', fence || { name: fp.geofence_name, color: allottedColor }, { lat: fp.latitude, lng: fp.longitude }, fp.device_id || 'Dummy Asset');
+                if (this.mapManager.showFlagsOnMap) {
+                  this.mapManager.generateFlagMarker('EXIT', fence || { name: fp.geofence_name, color: allottedColor }, { lat: fp.latitude, lng: fp.longitude }, fp.device_id || 'Dummy Asset');
+                }
                 this.showToast(`🚩 Flag Generated: ${fp.device_id || 'Dummy Asset'} EXITED "${(fence && fence.name) || fp.geofence_name}"`, 'warning');
               }
             } else {
@@ -3504,19 +3516,23 @@
           this.mapManager.updateSimulatedAsset(asset.id, asset.name, asset.coords, asset.color);
 
           if (ev === 'ENTER') {
-            // DYNAMIC ENTER FLAG (Just like mouse)
+            // DYNAMIC ENTER: Always update counter & toast message, only draw flag if flag option is ON
             if (this.mapManager) {
               this.mapManager.flagCount++;
               if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
-              this.mapManager.generateFlagMarker('ENTER', transitionFence, asset.coords, asset.name);
+              if (this.mapManager.showFlagsOnMap) {
+                this.mapManager.generateFlagMarker('ENTER', transitionFence, asset.coords, asset.name);
+              }
               this.showToast(`🚩 Flag Generated: ${asset.name} ENTERED "${fenceName}"`, 'success');
             }
           } else if (ev === 'EXIT') {
-            // DYNAMIC EXIT FLAG (Just like mouse)
+            // DYNAMIC EXIT: Always update counter & toast message, only draw flag if flag option is ON
             if (this.mapManager) {
               this.mapManager.flagCount++;
               if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
-              this.mapManager.generateFlagMarker('EXIT', transitionFence, asset.coords, asset.name);
+              if (this.mapManager.showFlagsOnMap) {
+                this.mapManager.generateFlagMarker('EXIT', transitionFence, asset.coords, asset.name);
+              }
               this.showToast(`🚩 Flag Generated: ${asset.name} EXITED "${fenceName}"`, 'warning');
             }
           } else if (ev === 'INSIDE') {
