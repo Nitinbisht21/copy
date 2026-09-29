@@ -1480,7 +1480,12 @@
     }
 
     generateFlagMarker(type, fence, pt, device = 'Mouse') {
-      if (!this.flagMarkersLayerGroup) return;
+      if (!this.flagMarkersLayerGroup) {
+        this.flagMarkersLayerGroup = L.layerGroup().addTo(this.map);
+      }
+      if (!this.map.hasLayer(this.flagMarkersLayerGroup)) {
+        this.map.addLayer(this.flagMarkersLayerGroup);
+      }
       const isEnter = type === 'ENTER';
       const flagColor = isEnter ? '#10b981' : '#ef4444';
       const fenceName = fence ? (fence.name || 'Geofence') : 'Geofence';
@@ -3334,77 +3339,39 @@
     startSimulationLoop() {
       if (this.simulationTimer) clearInterval(this.simulationTimer);
 
-      const getFenceStageCoord = (fence, stage, seedAngle) => {
+      function getGeofenceCenterAndRadius(fence) {
         let coords = fence.coordinates;
         if (typeof coords === 'string') {
           try { coords = JSON.parse(coords); } catch (e) {}
         }
-        if (!coords) return null;
+        if (!coords) return { center: { lat: 30.123456, lng: 78.123456 }, radius: 200 };
 
         if (fence.type === GeofenceType.CIRCLE) {
-          const lat = Number(coords.lat);
-          const lng = Number(coords.lng);
-          const radius = Number(fence.radius) || 200;
-          let r = radius * 0.5;
-          let angle = seedAngle;
-
-          if (stage === 0) {
-            // ENTER: Boundary edge crossing in
-            r = radius * 0.98;
-            angle = seedAngle;
-          } else if (stage === 1) {
-            // INSIDE: Interior waypoint 1
-            r = radius * 0.40;
-            angle = seedAngle + Math.PI / 4;
-          } else if (stage === 2) {
-            // INSIDE: Interior waypoint 2
-            r = radius * 0.65;
-            angle = seedAngle + Math.PI / 2;
-          } else {
-            // EXIT: Boundary edge crossing out
-            r = radius * 1.02;
-            angle = seedAngle + Math.PI;
-          }
-          const dLat = (r * Math.cos(angle)) / 111320.0;
-          const dLng = (r * Math.sin(angle)) / (111320.0 * Math.cos((lat * Math.PI) / 180.0));
-          return { lat: Number((lat + dLat).toFixed(6)), lng: Number((lng + dLng).toFixed(6)) };
+          return {
+            center: { lat: Number(coords.lat), lng: Number(coords.lng) },
+            radius: Number(fence.radius) || 200
+          };
         } else if (fence.type === GeofenceType.RECTANGLE) {
           const n = Number(coords.north);
           const s = Number(coords.south);
           const e = Number(coords.east);
           const w = Number(coords.west);
-          const latSpan = n - s;
-          const lngSpan = e - w;
-          if (stage === 0) {
-            // ENTER at west edge
-            return { lat: Number((s + latSpan * 0.35).toFixed(6)), lng: Number((w + lngSpan * 0.02).toFixed(6)) };
-          } else if (stage === 1) {
-            // INSIDE center west
-            return { lat: Number((s + latSpan * 0.50).toFixed(6)), lng: Number((w + lngSpan * 0.40).toFixed(6)) };
-          } else if (stage === 2) {
-            // INSIDE center east
-            return { lat: Number((s + latSpan * 0.60).toFixed(6)), lng: Number((w + lngSpan * 0.70).toFixed(6)) };
-          } else {
-            // EXIT at east edge
-            return { lat: Number((s + latSpan * 0.65).toFixed(6)), lng: Number((e + lngSpan * 0.02).toFixed(6)) };
-          }
+          const centerLat = (n + s) / 2;
+          const centerLng = (e + w) / 2;
+          const latSpanM = Math.abs(n - s) * 111320;
+          const lngSpanM = Math.abs(e - w) * 111320 * Math.cos((centerLat * Math.PI) / 180.0);
+          const radius = Math.max(120, Math.sqrt(latSpanM * latSpanM + lngSpanM * lngSpanM) / 2);
+          return { center: { lat: centerLat, lng: centerLng }, radius };
         } else if (fence.type === GeofenceType.POLYGON) {
           const pts = coords;
           if (Array.isArray(pts) && pts.length >= 3) {
-            if (stage === 0) {
-              return { lat: Number(pts[0][0].toFixed(6)), lng: Number(pts[0][1].toFixed(6)) };
-            } else if (stage === 1 || stage === 2) {
-              const avgLat = pts.reduce((acc, p) => acc + p[0], 0) / pts.length;
-              const avgLng = pts.reduce((acc, p) => acc + p[1], 0) / pts.length;
-              return { lat: Number(avgLat.toFixed(6)), lng: Number(avgLng.toFixed(6)) };
-            } else {
-              const mid = Math.floor(pts.length / 2);
-              return { lat: Number(pts[mid][0].toFixed(6)), lng: Number(pts[mid][1].toFixed(6)) };
-            }
+            const avgLat = pts.reduce((acc, p) => acc + p[0], 0) / pts.length;
+            const avgLng = pts.reduce((acc, p) => acc + p[1], 0) / pts.length;
+            return { center: { lat: avgLat, lng: avgLng }, radius: 250 };
           }
         }
-        return generatePointInsideFence(fence);
-      };
+        return { center: { lat: 30.123456, lng: 78.123456 }, radius: 200 };
+      }
 
       const stepSimulation = () => {
         if (!this.simulationRunning) return;
@@ -3412,55 +3379,167 @@
         if (!activeFences || activeFences.length === 0) return;
 
         this.simulatedAssets.forEach((asset, idx) => {
-          const fence = activeFences[idx % activeFences.length];
-          asset.stage = (asset.stage !== undefined) ? (asset.stage + 1) % 4 : idx % 4;
+          const assignedFence = activeFences[idx % activeFences.length];
+          const fenceMeta = getGeofenceCenterAndRadius(assignedFence);
+          if (!asset.insideFences) asset.insideFences = new Set();
 
-          let ev = 'INSIDE';
-          if (asset.stage === 0) {
-            ev = 'ENTER';
-          } else if (asset.stage === 3) {
-            ev = 'EXIT';
-          } else {
-            ev = 'INSIDE';
-          }
+          // 1. Initial placement if asset has no coordinates yet
+          if (!asset.coords) {
+            const latRad0 = (fenceMeta.center.lat * Math.PI) / 180.0;
+            const initAngle = (idx * (2 * Math.PI / 3)) + 0.35;
+            // Asset 0 starts outside (1.18x radius) heading inwards
+            // Asset 1 starts inside (0.60x radius) heading outwards
+            // Asset 2 starts outside (1.18x radius) heading inwards
+            const startDist = (idx === 1) ? fenceMeta.radius * 0.60 : fenceMeta.radius * 1.18;
+            const dLat0 = (startDist * Math.cos(initAngle)) / 111320.0;
+            const dLng0 = (startDist * Math.sin(initAngle)) / (111320.0 * Math.cos(latRad0));
 
-          const seedAngle = (idx * (2 * Math.PI / 3)) + ((Date.now() / 25000) % (2 * Math.PI));
-          asset.coords = getFenceStageCoord(fence, asset.stage, seedAngle);
+            asset.coords = {
+              lat: Number((fenceMeta.center.lat + dLat0).toFixed(6)),
+              lng: Number((fenceMeta.center.lng + dLng0).toFixed(6))
+            };
+            asset.speed = 18 + (idx * 4); // 18m, 22m, 26m per step
 
-          if (asset.coords) {
-            const allottedColor = fence.color || asset.color || '#2563eb';
-            this.mapManager.updateSimulatedAsset(asset.id, asset.name, asset.coords, asset.color);
-
-            // If boundary crossing (ENTER/EXIT), place radar flag marker on map
-            if (ev === 'ENTER' || ev === 'EXIT') {
-              if (this.mapManager && this.mapManager.showFlagsOnMap) {
-                this.mapManager.flagCount++;
-                if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
-                this.mapManager.generateFlagMarker(ev, fence, asset.coords, asset.name);
-                if (ev === 'EXIT') {
-                  this.showToast(`🚩 Flag Generated: ${asset.name} EXITED "${fence.name}"`, 'warning');
-                }
-              }
+            if (startDist > fenceMeta.radius) {
+              // Heading directly towards fence center so it crosses in
+              asset.heading = Math.atan2(
+                (fenceMeta.center.lng - asset.coords.lng) * Math.cos(latRad0),
+                (fenceMeta.center.lat - asset.coords.lat)
+              );
             } else {
-              // INSIDE waypoint footprint dot
-              if (this.mapManager && this.mapManager.showFootprintsOnMap) {
-                this.mapManager.renderFootprintPoint(asset.coords, {
-                  device: asset.name,
-                  fenceName: fence.name,
-                  color: allottedColor,
-                  fenceColor: fence.color
-                });
-              }
+              // Heading outwards across the boundary
+              asset.heading = initAngle + (Math.random() - 0.5) * 0.2;
             }
 
-            // Post telemetry footprint directly to MongoDB simulation_data_db
+            asset.insideFences = new Set();
+            for (const f of activeFences) {
+              if (isPointInGeofence(asset.coords, f)) {
+                asset.insideFences.add(f.id);
+              }
+            }
+          }
+
+          // 2. Realistic forward step along current heading
+          const latRad = (asset.coords.lat * Math.PI) / 180.0;
+          const stepMeters = asset.speed || 20;
+          const dLat = (stepMeters * Math.cos(asset.heading)) / 111320.0;
+          const dLng = (stepMeters * Math.sin(asset.heading)) / (111320.0 * Math.cos(latRad));
+
+          const nextCoords = {
+            lat: Number((asset.coords.lat + dLat).toFixed(6)),
+            lng: Number((asset.coords.lng + dLng).toFixed(6))
+          };
+
+          // 3. Dynamic Boundary Evaluation (EXACTLY like the mouse)
+          const nowInside = new Set();
+          let insideFenceObj = null;
+          for (const fence of activeFences) {
+            if (isPointInGeofence(nextCoords, fence)) {
+              nowInside.add(fence.id);
+              insideFenceObj = fence;
+            }
+          }
+
+          let ev = 'INSIDE';
+          let transitionFence = null;
+
+          // Check ENTER transition (Was outside -> Now inside)
+          for (const fid of nowInside) {
+            if (!asset.insideFences.has(fid)) {
+              transitionFence = activeFences.find(f => f.id === fid);
+              ev = 'ENTER';
+              break;
+            }
+          }
+
+          // Check EXIT transition (Was inside -> Now outside)
+          if (!transitionFence) {
+            for (const oldId of asset.insideFences) {
+              if (!nowInside.has(oldId)) {
+                transitionFence = activeFences.find(f => f.id === oldId);
+                ev = 'EXIT';
+                break;
+              }
+            }
+          }
+
+          if (!transitionFence) {
+            if (nowInside.size > 0) {
+              ev = 'INSIDE';
+              transitionFence = insideFenceObj;
+            } else {
+              ev = 'OUTSIDE';
+              transitionFence = assignedFence;
+            }
+          }
+
+          // 4. Steer realistic heading for next step
+          if (nowInside.size > 0) {
+            asset.outsideSteps = 0;
+            // Smooth wandering curve while cruising inside
+            asset.heading += (Math.random() - 0.5) * 0.35;
+          } else {
+            asset.outsideSteps = (asset.outsideSteps || 0) + 1;
+            // After 2 steps outside (~40m outside fence), steer back toward fence center!
+            if (asset.outsideSteps >= 2) {
+              const targetAngle = Math.atan2(
+                (fenceMeta.center.lng - nextCoords.lng) * Math.cos(latRad),
+                (fenceMeta.center.lat - nextCoords.lat)
+              );
+              asset.heading = targetAngle + (Math.random() - 0.5) * 0.25;
+              asset.outsideSteps = 0;
+            } else {
+              asset.heading += (Math.random() - 0.5) * 0.2;
+            }
+          }
+
+          // Update asset coordinate & fence state
+          asset.coords = nextCoords;
+          asset.insideFences = nowInside;
+
+          const allottedColor = (transitionFence && transitionFence.color) || asset.color || '#2563eb';
+          const fenceName = (transitionFence && transitionFence.name) || 'Geofence';
+
+          // Update simulated asset marker on map smoothly
+          this.mapManager.updateSimulatedAsset(asset.id, asset.name, asset.coords, asset.color);
+
+          if (ev === 'ENTER') {
+            // DYNAMIC ENTER FLAG (Just like mouse)
+            if (this.mapManager) {
+              this.mapManager.flagCount++;
+              if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
+              this.mapManager.generateFlagMarker('ENTER', transitionFence, asset.coords, asset.name);
+              this.showToast(`🚩 Flag Generated: ${asset.name} ENTERED "${fenceName}"`, 'success');
+            }
+          } else if (ev === 'EXIT') {
+            // DYNAMIC EXIT FLAG (Just like mouse)
+            if (this.mapManager) {
+              this.mapManager.flagCount++;
+              if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
+              this.mapManager.generateFlagMarker('EXIT', transitionFence, asset.coords, asset.name);
+              this.showToast(`🚩 Flag Generated: ${asset.name} EXITED "${fenceName}"`, 'warning');
+            }
+          } else if (ev === 'INSIDE') {
+            // Breadcrumb trail dot inside
+            if (this.mapManager && this.mapManager.showFootprintsOnMap) {
+              this.mapManager.renderFootprintPoint(asset.coords, {
+                device: asset.name,
+                fenceName: fenceName,
+                color: allottedColor,
+                fenceColor: allottedColor
+              });
+            }
+          }
+
+          // Post telemetry event to MongoDB simulation_data_db
+          if (ev !== 'OUTSIDE') {
             fetch('/api/footprints', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 device_id: asset.name,
-                geofence_id: fence.id,
-                geofence_name: fence.name,
+                geofence_id: transitionFence ? transitionFence.id : null,
+                geofence_name: fenceName,
                 latitude: asset.coords.lat,
                 longitude: asset.coords.lng,
                 event: ev,
@@ -3484,6 +3563,11 @@
       this.mapManager.clearFootprintsOnMap();
       this.mapManager.clearFlagMarkersOnMap();
       this.mapManager.clearSimulatedAssets();
+      this.simulatedAssets.forEach(a => {
+        a.coords = null;
+        a.insideFences = new Set();
+        a.outsideSteps = 0;
+      });
       if (this.footprintsLogList) {
         this.footprintsLogList.innerHTML = '<div class="empty-hint" style="font-size: 0.74rem;">Logs and footprints cleared.</div>';
       }
