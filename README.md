@@ -2,7 +2,18 @@
 
 A modern, high-performance geofence management system and map builder with an interactive web dashboard and a lightweight Python backend powered exclusively by MongoDB.
 
+🌐 **Live Application:** [Geofence Map Builder | Real-Time Geographic Boundary Creator](https://virtual-fence.vercel.app/)
+
 > 📖 **Looking for the complete operational guide?** Check out the [Comprehensive User Manual](USER_MANUAL.md) for step-by-step instructions, kinematics modeling, simulation walkthroughs, and MongoDB inspection guides.
+
+---
+
+## Live Deployment (Vercel)
+
+The live production application is accessible at:
+🔗 **[Geofence Map Builder | Real-Time Geographic Boundary Creator](https://virtual-fence.vercel.app/)**
+
+For step-by-step instructions on setting up Atlas IP access and deploying your own instance, see [User Manual - Section 11: Deploying to Vercel](USER_MANUAL.md#11-deploying-to-vercel-1-click-guide).
 
 ---
 
@@ -44,6 +55,8 @@ A modern, high-performance geofence management system and map builder with an in
 
 ```
 virtualfence/
+├── api/
+│   └── index.py             # Vercel Serverless WSGI entrypoint
 ├── css/
 │   └── style.css            # Custom CSS styling (dark/light UI, responsive layout)
 ├── js/
@@ -53,10 +66,13 @@ virtualfence/
 │   └── leaflet.js           # Leaflet JavaScript library
 ├── index.html               # Main dashboard UI
 ├── server.py                # Python backend (REST API, Telemetry Engine, MongoDB Atlas)
+├── vercel.json              # Vercel serverless routing configuration
+├── .vercelignore            # Vercel deployment exclusions (venv, .env, cache)
 ├── requirements.txt         # Python dependencies (Flask, pymongo, python-dotenv, dnspython)
 ├── .env.example             # MongoDB URI configuration template
 ├── .gitignore               # Git ignore rules for venv, cache, and env
-└── README.md                # Project documentation
+├── USER_MANUAL.md           # Comprehensive User Manual and operational guide
+└── README.md                # Project overview and quick start documentation
 ```
 
 ---
