@@ -2,6 +2,8 @@
 
 A modern, high-performance geofence management system and map builder with an interactive web dashboard and a lightweight Python backend powered exclusively by MongoDB.
 
+> 📖 **Looking for the complete operational guide?** Check out the [Comprehensive User Manual](USER_MANUAL.md) for step-by-step instructions, kinematics modeling, simulation walkthroughs, and MongoDB inspection guides.
+
 ---
 
 ## Features
