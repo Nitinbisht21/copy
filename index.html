@@ -541,13 +541,17 @@
             <button type="button" id="btn-copy-tracker-link" class="btn-primary" style="width: auto; padding: 6px 14px; font-size: 0.8rem;">Copy</button>
             <a id="btn-open-tracker-tab" href="/track" target="_blank" class="btn-secondary" style="padding: 6px 14px; font-size: 0.8rem; text-decoration: none; display: flex; align-items: center; justify-content: center; gap: 3px; border-radius: 6px; color: var(--text-main); font-weight: 600;">Open Tab ↗</a>
           </div>
+          <div style="display: flex; gap: 0.4rem; margin-top: 0.25rem;">
+            <a id="btn-open-device2-tab" href="/track?device=2" target="_blank" class="btn-secondary" style="flex: 1; text-align: center; padding: 6px 8px; font-size: 0.76rem; text-decoration: none; border-radius: 6px; color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); font-weight: 600;">+ Phone 2 (Slot 2) ↗</a>
+            <a id="btn-open-device3-tab" href="/track?device=3" target="_blank" class="btn-secondary" style="flex: 1; text-align: center; padding: 6px 8px; font-size: 0.76rem; text-decoration: none; border-radius: 6px; color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.3); font-weight: 600;">+ Phone 3 (Slot 3) ↗</a>
+          </div>
         </div>
 
         <div style="background: rgba(16, 185, 129, 0.08); border: 1px dashed rgba(16, 185, 129, 0.3); border-radius: 12px; padding: 0.75rem 1rem; font-size: 0.8rem; color: #6ee7b7; line-height: 1.45; margin-top: 0.35rem;">
-          <strong>Quick Steps:</strong><br>
-          1. Click <strong>"Open Tab ↗"</strong> (or copy the URL to your phone).<br>
-          2. Tap <strong>"Allow Location Access"</strong> when prompted.<br>
-          3. Tap <strong>"Start GPS Tracking"</strong> — your device will immediately appear online on this map!
+          <strong>Multi-Device Fleet Instructions:</strong><br>
+          • <strong>Phone 1:</strong> Open <code>/track</code> on your first phone.<br>
+          • <strong>Phone 2:</strong> Open <code>/track</code> on your second phone (or click <strong>Phone 2 (Slot 2)</strong> above).<br>
+          • Each phone automatically connects as its own independent device (<strong>Device 1</strong>, <strong>Device 2</strong>...) with its own GPS marker and history trail on the map!
         </div>
       </div>
     </div>

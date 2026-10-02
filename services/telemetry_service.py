@@ -233,13 +233,14 @@ def process_telemetry(payload: dict, active_fences: list = None) -> tuple:
       5. Updates device metadata
     """
     device_id = str(payload.get('device_id', '')).strip()
+    client_uuid = str(payload.get('client_uuid', '')).strip() or None
     fingerprint = str(payload.get('fingerprint', '')).strip() or None
     client_ip = payload.get('client_ip')
 
-    # Verify device exists or reconnect via fingerprint/id
+    # Verify device exists or reconnect via device_id or client_uuid
     device = get_device(device_id) if device_id else None
-    if not device and fingerprint:
-        device = find_existing_device(fingerprint=fingerprint)
+    if not device and client_uuid:
+        device = find_existing_device(client_uuid=client_uuid)
         if device:
             device_id = device['device_id']
 
@@ -250,6 +251,7 @@ def process_telemetry(payload: dict, active_fences: list = None) -> tuple:
             user_id=payload.get('user_id', 'anon_user'),
             platform=payload.get('platform', 'browser'),
             custom_id=device_id if device_id else None,
+            client_uuid=client_uuid,
             fingerprint=fingerprint,
             client_ip=client_ip
         )
@@ -261,6 +263,7 @@ def process_telemetry(payload: dict, active_fences: list = None) -> tuple:
                 'device_id': device_id,
                 'device_name': dev_name or 'Device 1',
                 'platform': 'browser',
+                'client_uuid': client_uuid,
                 'revoked': False
             }
 

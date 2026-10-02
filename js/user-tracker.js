@@ -8,11 +8,18 @@
 (function () {
   'use strict';
 
+  // URL slot handling for testing multiple devices on same browser (?device=2 or ?slot=2 or ?new=1)
+  const urlParams = (typeof window !== 'undefined' && window.location) ? new URLSearchParams(window.location.search) : new URLSearchParams();
+  const deviceSlot = urlParams.get('device') || urlParams.get('slot') || '';
+  const isForcedNew = urlParams.get('new') === '1' || urlParams.get('reset') === '1';
+  const slotSuffix = deviceSlot ? `_slot_${deviceSlot}` : '';
+
   // Constants & Storage Keys
   const STORAGE_KEYS = {
-    DEVICE_ID: 'vf_device_id',
-    DEVICE_NAME: 'vf_device_name',
-    AUTH_TOKEN: 'vf_auth_token',
+    DEVICE_ID: `vf_device_id${slotSuffix}`,
+    DEVICE_NAME: `vf_device_name${slotSuffix}`,
+    CLIENT_UUID: `vf_client_uuid${slotSuffix}`,
+    AUTH_TOKEN: `vf_auth_token${slotSuffix}`,
     USER_ID: 'vf_user_id',
     FINGERPRINT: 'vf_device_fingerprint'
   };
@@ -51,6 +58,30 @@
         document.cookie = `${key}=; max-age=0; path=/`;
       }
     } catch (e) {}
+  }
+
+  // Generates a cryptographically unique persistent client installation UUID
+  function generateClientUuid() {
+    let rand = '';
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      rand = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+    } else {
+      rand = Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 8);
+    }
+    return `cli_${rand}_${Date.now().toString(36)}`;
+  }
+
+  function getOrCreateClientUuid(key) {
+    if (isForcedNew) {
+      const fresh = generateClientUuid();
+      setStoredValue(key, fresh);
+      return fresh;
+    }
+    let stored = getStoredValue(key);
+    if (stored && stored.startsWith('cli_')) return stored;
+    const fresh = generateClientUuid();
+    setStoredValue(key, fresh);
+    return fresh;
   }
 
   // Generates a deterministic device/browser hardware fingerprint
@@ -98,9 +129,10 @@
 
   class UserTracker {
     constructor() {
+      this.clientUuid = getOrCreateClientUuid(STORAGE_KEYS.CLIENT_UUID);
       this.fingerprint = generateDeviceFingerprint();
-      this.deviceId = getStoredValue(STORAGE_KEYS.DEVICE_ID) || null;
-      this.deviceName = getStoredValue(STORAGE_KEYS.DEVICE_NAME) || null;
+      this.deviceId = isForcedNew ? null : (getStoredValue(STORAGE_KEYS.DEVICE_ID) || null);
+      this.deviceName = isForcedNew ? null : (getStoredValue(STORAGE_KEYS.DEVICE_NAME) || null);
       this.token = getStoredValue(STORAGE_KEYS.AUTH_TOKEN) || null;
       this.userId = getStoredValue(STORAGE_KEYS.USER_ID) || 'anon_user';
 
@@ -144,6 +176,7 @@
       this.inputDeviceId = document.getElementById('input-device-id');
       this.btnCloseDeviceModal = document.getElementById('btn-close-device-modal');
       this.btnUserProfile = document.getElementById('btn-user-profile');
+      this.btnRegisterNewDevice = document.getElementById('btn-register-new-device');
     }
 
     bindEvents() {
@@ -162,6 +195,12 @@
       this.btnCloseDeviceModal.addEventListener('click', () => {
         this.closeDeviceModal();
       });
+
+      if (this.btnRegisterNewDevice) {
+        this.btnRegisterNewDevice.addEventListener('click', () => {
+          this.registerAsBrandNewDevice();
+        });
+      }
 
       this.deviceForm.addEventListener('submit', (e) => {
         e.preventDefault();
@@ -193,6 +232,24 @@
       setInterval(() => this.updateSyncElapsed(), 1000);
     }
 
+    async registerAsBrandNewDevice() {
+      // Allocate a fresh persistent client UUID and reset device identity
+      this.clientUuid = generateClientUuid();
+      setStoredValue(STORAGE_KEYS.CLIENT_UUID, this.clientUuid);
+      setStoredValue(STORAGE_KEYS.DEVICE_ID, null);
+      setStoredValue(STORAGE_KEYS.DEVICE_NAME, null);
+      this.deviceId = null;
+      this.deviceName = null;
+
+      if (this.deviceBadge) this.deviceBadge.textContent = 'CONNECTING...';
+      if (this.userDisplayName) this.userDisplayName.textContent = 'Connecting...';
+      if (this.inputDeviceName) this.inputDeviceName.value = '';
+      if (this.inputDeviceId) this.inputDeviceId.value = '';
+      this.networkStatus.textContent = 'Registering new phone slot...';
+
+      await this.registerDeviceOnBackend(null, null);
+    }
+
     detectPlatform() {
       const ua = navigator.userAgent || '';
       if (/android/i.test(ua)) return 'android';
@@ -217,6 +274,7 @@
           platform: this.detectPlatform(),
           user_id: this.userId,
           device_id: customId || this.deviceId || undefined,
+          client_uuid: this.clientUuid,
           fingerprint: this.fingerprint
         };
 
@@ -345,6 +403,7 @@
       this.lastPosition = {
         device_id: this.deviceId,
         device_name: this.deviceName,
+        client_uuid: this.clientUuid,
         fingerprint: this.fingerprint,
         platform: this.detectPlatform(),
         latitude: Number(latitude.toFixed(6)),

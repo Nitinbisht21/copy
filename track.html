@@ -614,7 +614,16 @@
           <input type="text" id="input-device-id" class="form-input" placeholder="e.g. DEV_001" style="font-family: var(--font-mono);">
         </div>
 
-        <button type="submit" class="btn-submit">Connect Device</button>
+        <div style="display: flex; gap: 0.5rem; margin-top: 0.2rem;">
+          <button type="submit" class="btn-submit" style="flex: 1;">Save / Update</button>
+          <button type="button" id="btn-register-new-device" class="btn-submit" style="flex: 1; background: linear-gradient(135deg, #3b82f6, #2563eb);">+ New Device</button>
+        </div>
+
+        <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.6rem; font-size: 0.76rem; color: var(--text-muted); text-align: center;">
+          Testing multi-devices on one browser?
+          <a href="/track?device=2" target="_blank" style="color: #38bdf8; text-decoration: underline; margin-left: 4px;">Open Device 2 Slot ↗</a>
+        </div>
+
         <button type="button" id="btn-close-device-modal" class="btn-text-action">Close</button>
       </form>
     </div>

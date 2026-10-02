@@ -100,13 +100,14 @@ def get_next_device_number() -> int:
         return 1
     return max(seen_numbers) + 1
 
-def find_existing_device(custom_id: str = None, fingerprint: str = None, client_ip: str = None, platform: str = None) -> dict:
+def find_existing_device(custom_id: str = None, client_uuid: str = None, fingerprint: str = None) -> dict:
     """
     Finds an existing registered device for reconnect memory.
-    Prioritizes:
+    Matches strictly on:
       1. Exact custom_id / device_id match
-      2. Hardware/Browser fingerprint match
-      3. Matching IP + platform if single recent candidate exists
+      2. Exact client_uuid match (unique persistent installation ID per client)
+    Does NOT match on IP or platform, ensuring multiple distinct phones on the same
+    WiFi or with identical OS NEVER hijack each other.
     """
     all_devices = dict(in_memory_devices)
     db = get_tracking_db()
@@ -122,20 +123,17 @@ def find_existing_device(custom_id: str = None, fingerprint: str = None, client_
         c_id = custom_id.strip()
         if c_id in all_devices:
             return all_devices[c_id]
-
-    # 2. Fingerprint match
-    if fingerprint and len(fingerprint.strip()) >= 4:
-        fp = fingerprint.strip()
         for dev in all_devices.values():
-            if dev.get('fingerprint') == fp:
+            if dev.get('device_id') == c_id:
                 return dev
 
-    # 3. IP + platform fallback (if client reconnected without persistent storage)
-    if client_ip and client_ip not in ('127.0.0.1', 'localhost', '::1') and platform:
-        plat = platform.lower().strip()
-        candidates = [d for d in all_devices.values() if d.get('client_ip') == client_ip and d.get('platform') == plat]
-        if len(candidates) == 1:
-            return candidates[0]
+    # 2. Exact client_uuid match
+    if client_uuid:
+        cu = client_uuid.strip()
+        if len(cu) >= 6:
+            for dev in all_devices.values():
+                if dev.get('client_uuid') == cu:
+                    return dev
 
     return None
 
@@ -144,21 +142,23 @@ def register_device(
     user_id: str = 'anon_user',
     platform: str = 'browser',
     custom_id: str = None,
+    client_uuid: str = None,
     fingerprint: str = None,
     client_ip: str = None
 ) -> tuple:
     """
     Registers a tracking device or reconnects an existing physical phone.
-    - If phone has connected previously: Reconnects, preserves previous name & ID, avoids duplicate creation.
-    - If brand new phone: Applies auto-increment function (Device 1, Device 2...), assigns unique ID.
+    - If phone has connected previously (matched by client_uuid or custom_id): Reconnects, preserves previous name & ID.
+    - If brand new phone (distinct client_uuid): Applies auto-increment function (Device 1, Device 2...), assigns unique ID.
     """
     uid = (user_id or 'anon_user').strip()
     plat = (platform or 'browser').lower().strip()
     now = datetime.utcnow().isoformat() + 'Z'
     incoming_name = (device_name or '').strip()
+    cu = (client_uuid or '').strip() or None
 
     # Check if this physical phone already exists (Reconnect!)
-    existing = find_existing_device(custom_id=custom_id, fingerprint=fingerprint, client_ip=client_ip, platform=plat)
+    existing = find_existing_device(custom_id=custom_id, client_uuid=cu, fingerprint=fingerprint)
 
     if existing:
         # RECONNECT: Keep previous name and previous ID as requested by user!
@@ -178,6 +178,8 @@ def register_device(
         existing['platform'] = plat
         existing['revoked'] = False
         existing['is_offline_forced'] = False
+        if cu:
+            existing['client_uuid'] = cu
         if fingerprint:
             existing['fingerprint'] = fingerprint
         if client_ip:
@@ -214,6 +216,7 @@ def register_device(
         'user_id': uid,
         'device_name': name,
         'platform': plat,
+        'client_uuid': cu,
         'fingerprint': fingerprint,
         'client_ip': client_ip,
         'status': 'online',
@@ -269,70 +272,44 @@ def get_device(device_id: str) -> dict:
 
 def deduplicate_devices_list(device_list: list) -> list:
     """
-    Deduplicates device records so that one physical phone has ONLY ONE record and location.
-    Merges duplicate copies created by page refreshes or re-registrations.
+    Deduplicates device records so that one physical phone has ONLY ONE record.
+    Merges duplicate copies of the same client (matching client_uuid or device_id).
+    NEVER purges distinct physical devices just because they are nearby or share an IP.
     """
     if not device_list:
         return []
 
-    # Map by primary unique identifier
     unique_map = {}
     stale_ids_to_purge = set()
 
     for dev in device_list:
         did = dev.get('device_id')
-        fp = dev.get('fingerprint')
+        cu = dev.get('client_uuid')
 
-        # Generate a grouping key
-        if fp and len(fp) >= 4:
-            key = f"fp_{fp}"
+        # Primary grouping key is client_uuid if present, else device_id
+        if cu and len(str(cu).strip()) >= 6:
+            key = f"cu_{str(cu).strip()}"
         else:
             key = f"id_{did}"
 
         if key not in unique_map:
             unique_map[key] = dev
         else:
-            # A duplicate copy of this device exists! Pick the one with the newest last_seen
             existing = unique_map[key]
             existing_ts = existing.get('last_seen') or existing.get('updated_at') or ''
             current_ts = dev.get('last_seen') or dev.get('updated_at') or ''
 
             if current_ts >= existing_ts:
-                # Replace with newer, mark old as stale
-                stale_ids_to_purge.add(existing.get('device_id'))
-                # Preserve name if current is generic
+                # Current is newer; mark existing as stale if different ID
+                if existing.get('device_id') != did:
+                    stale_ids_to_purge.add(existing.get('device_id'))
                 if _is_generic_name(dev.get('device_name')) and not _is_generic_name(existing.get('device_name')):
                     dev['device_name'] = existing['device_name']
                 unique_map[key] = dev
             else:
-                stale_ids_to_purge.add(did)
-
-    # Secondary check: If two devices have identical GPS coordinates (within 15m) and same user/IP, merge them
-    results = list(unique_map.values())
-    deduped = []
-    seen_coords = []
-
-    for dev in results:
-        loc = dev.get('last_location')
-        if loc and isinstance(loc, dict) and loc.get('latitude') and loc.get('longitude'):
-            lat = float(loc['latitude'])
-            lng = float(loc['longitude'])
-            is_dup = False
-            for prev_dev, prev_lat, prev_lng in seen_coords:
-                # Approximate distance in meters
-                d_lat = (lat - prev_lat) * 111320.0
-                d_lng = (lng - prev_lng) * 111320.0 * math.cos(math.radians(lat))
-                dist = math.sqrt(d_lat*d_lat + d_lng*d_lng)
-                if dist < 15.0 and (dev.get('client_ip') == prev_dev.get('client_ip') or dev.get('platform') == prev_dev.get('platform')):
-                    # Virtually identical location from same client -> duplicate copy!
-                    is_dup = True
-                    stale_ids_to_purge.add(dev.get('device_id'))
-                    break
-            if not is_dup:
-                seen_coords.append((dev, lat, lng))
-                deduped.append(dev)
-        else:
-            deduped.append(dev)
+                # Existing is newer; mark current as stale if different ID
+                if did != existing.get('device_id'):
+                    stale_ids_to_purge.add(did)
 
     # Clean up purged stale IDs from in-memory cache and DB
     if stale_ids_to_purge:
@@ -345,7 +322,7 @@ def deduplicate_devices_list(device_list: list) -> list:
             except Exception:
                 pass
 
-    return deduped
+    return list(unique_map.values())
 
 def list_devices(user_id: str = None, include_revoked: bool = False) -> list:
     """Lists unique devices with status. Guarantees 1 physical device = 1 entry."""
@@ -397,7 +374,7 @@ def update_device(device_id: str, updates: dict) -> dict:
         'device_name', 'platform', 'revoked', 'last_seen', 'last_location',
         'current_fence', 'status', 'is_offline_forced', 'offline_reason',
         'distance_outside', 'tracking_active', 'fingerprint', 'client_ip',
-        'device_number'
+        'device_number', 'client_uuid'
     ]
     for k in allowed_keys:
         if k in updates:

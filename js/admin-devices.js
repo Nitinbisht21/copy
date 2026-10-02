@@ -87,19 +87,21 @@
     }
 
     // Client-side deduplication safeguard to guarantee 1 physical device = 1 marker & 1 card
+    // Client-side deduplication safeguard to guarantee 1 physical device client = 1 marker & 1 card
     deduplicateDevices(deviceList) {
       if (!Array.isArray(deviceList) || deviceList.length === 0) return [];
 
       const map = new Map();
       for (const dev of deviceList) {
-        const fp = dev.fingerprint;
+        const cu = dev.client_uuid;
         const did = dev.device_id;
-        const key = (fp && fp.length >= 4) ? `fp_${fp}` : `id_${did}`;
+        // Group strictly by persistent client_uuid if present, else by device_id
+        const key = (cu && cu.length >= 6) ? `cu_${cu}` : `id_${did}`;
 
         if (!map.has(key)) {
           map.set(key, dev);
         } else {
-          // If duplicate exists, keep the one with newest last_seen
+          // If duplicate records exist for the same client installation, keep the one with newest last_seen
           const existing = map.get(key);
           const exTs = existing.last_seen || existing.updated_at || '';
           const curTs = dev.last_seen || dev.updated_at || '';
@@ -109,32 +111,8 @@
         }
       }
 
-      // Secondary proximity deduplication (within 15m from same IP or platform)
-      const list = Array.from(map.values());
-      const unique = [];
-      const seenLocs = [];
-
-      for (const d of list) {
-        const loc = d.last_location;
-        if (loc && typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
-          let isDup = false;
-          for (const prev of seenLocs) {
-            const dist = this.calculateDistance(loc.latitude, loc.longitude, prev.lat, prev.lng);
-            if (dist < 15.0 && (d.client_ip === prev.ip || d.platform === prev.plat)) {
-              isDup = true;
-              break;
-            }
-          }
-          if (!isDup) {
-            seenLocs.push({ lat: loc.latitude, lng: loc.longitude, ip: d.client_ip, plat: d.platform });
-            unique.push(d);
-          }
-        } else {
-          unique.push(d);
-        }
-      }
-
-      return unique;
+      // Return all distinct devices; NEVER discard physical devices standing close together or sharing an IP
+      return Array.from(map.values());
     }
 
     async fetchDevices(showToastNotification = false) {
@@ -284,20 +262,36 @@
         .join('');
     }
 
+    getDeviceMarkerColor(device, index = 0) {
+      const isOutsideForced = Boolean(device.is_offline_forced || device.offline_reason === 'outside_fence_100m');
+      if (isOutsideForced) return '#ef4444';
+
+      const status = device.status || 'offline';
+      if (status === 'offline') return '#94a3b8';
+      if (status === 'inactive') return '#f59e0b';
+
+      const FLEET_PALETTE = ['#10b981', '#3b82f6', '#8b5cf6', '#f97316', '#06b6d4', '#ec4899', '#14b8a6', '#eab308'];
+      let num = device.device_number || (index + 1);
+      if (!num || isNaN(num)) {
+        const m = (device.device_name || '').match(/\b(\d+)\b/);
+        num = m ? parseInt(m[1], 10) : (index + 1);
+      }
+      return FLEET_PALETTE[(num - 1) % FLEET_PALETTE.length];
+    }
+
     updateMapMarkers() {
       if (!this.map || !this.realDevicesLayer) return;
 
       const seenIds = new Set();
 
-      this.devices.forEach((device) => {
+      this.devices.forEach((device, idx) => {
         const loc = device.last_location;
         if (!loc || typeof loc.latitude !== 'number' || typeof loc.longitude !== 'number') return;
 
         seenIds.add(device.device_id);
         const latlng = [loc.latitude, loc.longitude];
         const status = device.status || 'offline';
-        const isOutsideForced = Boolean(device.is_offline_forced || device.offline_reason === 'outside_fence_100m');
-        const color = isOutsideForced ? '#ef4444' : status === 'online' ? '#10b981' : status === 'inactive' ? '#f59e0b' : '#94a3b8';
+        const color = this.getDeviceMarkerColor(device, idx);
 
         // Check if marker exists
         let marker = this.deviceMarkers.get(device.device_id);
@@ -571,6 +565,10 @@
       if (this.qrTrackerLink) this.qrTrackerLink.value = trackUrl;
       const btnOpen = document.getElementById('btn-open-tracker-tab');
       if (btnOpen) btnOpen.href = trackUrl;
+      const btnOpen2 = document.getElementById('btn-open-device2-tab');
+      if (btnOpen2) btnOpen2.href = `${trackUrl}?device=2`;
+      const btnOpen3 = document.getElementById('btn-open-device3-tab');
+      if (btnOpen3) btnOpen3.href = `${trackUrl}?device=3`;
 
       if (this.connectPhoneModal) this.connectPhoneModal.classList.remove('hidden');
     }

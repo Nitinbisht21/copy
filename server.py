@@ -926,6 +926,7 @@ def create_app():
             user_id=user_id,
             platform=data.get('platform', 'browser'),
             custom_id=data.get('device_id'),
+            client_uuid=data.get('client_uuid'),
             fingerprint=data.get('fingerprint'),
             client_ip=client_ip
         )
