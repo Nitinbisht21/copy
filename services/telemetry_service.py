@@ -21,7 +21,7 @@ from services.db import (
     in_memory_device_geofence_state,
     use_mongodb
 )
-from services.device_service import get_device, update_device, register_device
+from services.device_service import get_device, update_device, register_device, find_existing_device
 
 EARTH_RADIUS_METERS = 6371008.8
 
@@ -233,23 +233,33 @@ def process_telemetry(payload: dict, active_fences: list = None) -> tuple:
       5. Updates device metadata
     """
     device_id = str(payload.get('device_id', '')).strip()
-    if not device_id:
-        return None, "Missing device_id."
+    fingerprint = str(payload.get('fingerprint', '')).strip() or None
+    client_ip = payload.get('client_ip')
 
-    # Verify device exists and is not revoked; auto-register immediately if new
-    device = get_device(device_id)
+    # Verify device exists or reconnect via fingerprint/id
+    device = get_device(device_id) if device_id else None
+    if not device and fingerprint:
+        device = find_existing_device(fingerprint=fingerprint)
+        if device:
+            device_id = device['device_id']
+
     if not device:
-        dev_name = payload.get('device_name') or f"Device {device_id[-6:]}"
+        dev_name = payload.get('device_name') or None
         device, reg_err = register_device(
             device_name=dev_name,
             user_id=payload.get('user_id', 'anon_user'),
             platform=payload.get('platform', 'browser'),
-            custom_id=device_id
+            custom_id=device_id if device_id else None,
+            fingerprint=fingerprint,
+            client_ip=client_ip
         )
-        if reg_err or not device:
+        if device:
+            device_id = device['device_id']
+        elif not device_id:
+            device_id = f"DEV_{uuid.uuid4().hex[:6].upper()}"
             device = {
                 'device_id': device_id,
-                'device_name': dev_name,
+                'device_name': dev_name or 'Device 1',
                 'platform': 'browser',
                 'revoked': False
             }
@@ -282,6 +292,20 @@ def process_telemetry(payload: dict, active_fences: list = None) -> tuple:
 
     # 1. Evaluate point against active geofences & calculate distance to boundary
     fences = [f for f in (active_fences or []) if f.get('status') == 'active']
+    if not fences:
+        try:
+            import tempfile, os
+            cache_file = os.path.join(tempfile.gettempdir(), 'vf_geofences_cache.json')
+            if os.path.exists(cache_file):
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    cdata = json.load(f)
+                    if isinstance(cdata, dict):
+                        fences = [f for f in cdata.values() if f.get('status') == 'active']
+                    elif isinstance(cdata, list):
+                        fences = [f for f in cdata if f.get('status') == 'active']
+        except Exception:
+            pass
+
     currently_inside_fences = []
     events_triggered = []
 

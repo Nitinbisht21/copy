@@ -78,7 +78,7 @@ try:
     )
     from services.device_service import (
         register_device, list_devices, get_device, update_device,
-        revoke_device, delete_device, get_device_history
+        revoke_device, delete_device, get_device_history, purge_all_duplicates
     )
     from services.telemetry_service import (
         process_telemetry, list_geofence_events, distance_to_fence
@@ -908,15 +908,29 @@ def create_app():
         data = request.get_json(force=True) or {}
         user = get_current_user(request)
         user_id = (user and user.get('user_id')) or data.get('user_id') or 'anon_user'
+        client_ip = request.headers.get('x-forwarded-for', request.remote_addr)
+        if client_ip and ',' in client_ip:
+            client_ip = client_ip.split(',')[0].strip()
         device, err = register_device(
-            device_name=data.get('device_name', 'Mobile Device'),
+            device_name=data.get('device_name'),
             user_id=user_id,
             platform=data.get('platform', 'browser'),
-            custom_id=data.get('device_id')
+            custom_id=data.get('device_id'),
+            fingerprint=data.get('fingerprint'),
+            client_ip=client_ip
         )
         if err:
             return jsonify({'error': err}), 400
         return jsonify(device), 201
+
+    @app.route('/api/devices/purge-duplicates', methods=['POST'])
+    @app.route('/devices/purge-duplicates', methods=['POST'])
+    def api_purge_device_duplicates():
+        allowed, err = check_admin_access(request)
+        if not allowed:
+            return jsonify({'error': err}), 403
+        remaining_count = purge_all_duplicates()
+        return jsonify({'success': True, 'remaining_devices': remaining_count})
 
     @app.route('/api/devices', methods=['GET'])
     @app.route('/devices', methods=['GET'])
@@ -979,6 +993,11 @@ def create_app():
     @app.route('/telemetry', methods=['POST'])
     def api_real_telemetry():
         data = request.get_json(force=True) or {}
+        client_ip = request.headers.get('x-forwarded-for', request.remote_addr)
+        if client_ip and ',' in client_ip:
+            client_ip = client_ip.split(',')[0].strip()
+        if 'client_ip' not in data:
+            data['client_ip'] = client_ip
         active_fences = db_list_geofences()
         result, err = process_telemetry(data, active_fences)
         if err:

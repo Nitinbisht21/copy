@@ -1,7 +1,7 @@
 /**
  * Admin Panel - Real Multi-Device Tracking Engine & History Manager
  * Interacts with Leaflet map, polls GET /api/devices, renders live multi-device markers,
- * and plots historical GPS movement trails.
+ * enforces 1-device = 1-location deduplication, and plots historical GPS movement trails.
  */
 
 (function () {
@@ -33,7 +33,7 @@
           this.initUI();
           this.fetchDevices();
           this.startPolling();
-          console.log('[AdminDeviceManager] Successfully connected to Leaflet map and initialized real GPS fleet tracking.');
+          console.log('[AdminDeviceManager] Connected to map with deduplicated fleet tracking.');
         }
       }, 300);
     }
@@ -42,6 +42,7 @@
       this.deviceListContainer = document.getElementById('admin-device-list');
       this.deviceCountBadge = document.getElementById('device-count-badge');
       this.btnRefreshDevices = document.getElementById('btn-refresh-devices');
+      this.btnCleanDuplicates = document.getElementById('btn-clean-duplicates');
       this.btnConnectPhoneModal = document.getElementById('btn-connect-phone-modal');
       this.connectPhoneModal = document.getElementById('connect-phone-modal');
       this.btnCloseConnectModal = document.getElementById('btn-close-connect-modal');
@@ -56,6 +57,10 @@
 
       if (this.btnRefreshDevices) {
         this.btnRefreshDevices.addEventListener('click', () => this.fetchDevices(true));
+      }
+
+      if (this.btnCleanDuplicates) {
+        this.btnCleanDuplicates.addEventListener('click', () => this.purgeDuplicates());
       }
 
       if (this.btnConnectPhoneModal) {
@@ -81,11 +86,63 @@
       this.pollInterval = setInterval(() => this.fetchDevices(false), 3000);
     }
 
+    // Client-side deduplication safeguard to guarantee 1 physical device = 1 marker & 1 card
+    deduplicateDevices(deviceList) {
+      if (!Array.isArray(deviceList) || deviceList.length === 0) return [];
+
+      const map = new Map();
+      for (const dev of deviceList) {
+        const fp = dev.fingerprint;
+        const did = dev.device_id;
+        const key = (fp && fp.length >= 4) ? `fp_${fp}` : `id_${did}`;
+
+        if (!map.has(key)) {
+          map.set(key, dev);
+        } else {
+          // If duplicate exists, keep the one with newest last_seen
+          const existing = map.get(key);
+          const exTs = existing.last_seen || existing.updated_at || '';
+          const curTs = dev.last_seen || dev.updated_at || '';
+          if (curTs >= exTs) {
+            map.set(key, dev);
+          }
+        }
+      }
+
+      // Secondary proximity deduplication (within 15m from same IP or platform)
+      const list = Array.from(map.values());
+      const unique = [];
+      const seenLocs = [];
+
+      for (const d of list) {
+        const loc = d.last_location;
+        if (loc && typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
+          let isDup = false;
+          for (const prev of seenLocs) {
+            const dist = this.calculateDistance(loc.latitude, loc.longitude, prev.lat, prev.lng);
+            if (dist < 15.0 && (d.client_ip === prev.ip || d.platform === prev.plat)) {
+              isDup = true;
+              break;
+            }
+          }
+          if (!isDup) {
+            seenLocs.push({ lat: loc.latitude, lng: loc.longitude, ip: d.client_ip, plat: d.platform });
+            unique.push(d);
+          }
+        } else {
+          unique.push(d);
+        }
+      }
+
+      return unique;
+    }
+
     async fetchDevices(showToastNotification = false) {
       try {
         const res = await fetch('/api/devices');
         if (res.ok) {
-          this.devices = await res.json();
+          const rawDevices = await res.json();
+          this.devices = this.deduplicateDevices(rawDevices);
           this.renderDeviceList();
           this.updateMapMarkers();
 
@@ -99,12 +156,65 @@
           }
 
           if (showToastNotification && window.uiController) {
-            window.uiController.showToast(`Updated ${this.devices.length} registered devices`, 'info');
+            window.uiController.showToast(`Updated ${this.devices.length} unique device(s)`, 'info');
           }
         }
       } catch (err) {
         console.warn('Could not fetch devices:', err);
       }
+    }
+
+    async purgeDuplicates() {
+      try {
+        const res = await fetch('/api/devices/purge-duplicates', { method: 'POST' });
+        if (res.ok) {
+          if (window.uiController) {
+            window.uiController.showToast('Cleaned duplicate device copies.', 'success');
+          }
+          await this.fetchDevices(false);
+        }
+      } catch (e) {
+        console.warn('Purge error:', e);
+      }
+    }
+
+    evaluateDeviceGeofence(device) {
+      const isOutsideForced = Boolean(device.is_offline_forced || device.offline_reason === 'outside_fence_100m');
+      if (isOutsideForced) {
+        return `🚫 Outside (${Math.round(device.distance_outside || 100)}m - Paused)`;
+      }
+
+      const lastLoc = device.last_location;
+      if (!lastLoc || typeof lastLoc.latitude !== 'number' || typeof lastLoc.longitude !== 'number') {
+        return 'No GPS Fix';
+      }
+
+      // Check current geofences from active map store
+      const store = (window.geofenceApp && window.geofenceApp.store) || window.geofenceStore;
+      if (store && typeof store.getActiveGeofences === 'function') {
+        const activeFences = store.getActiveGeofences();
+        for (const f of activeFences) {
+          if (f.type === 'circle' && f.coordinates && f.radius) {
+            const cLat = Number(f.coordinates.lat);
+            const cLng = Number(f.coordinates.lng);
+            const d = this.calculateDistance(lastLoc.latitude, lastLoc.longitude, cLat, cLng);
+            if (d <= Number(f.radius)) {
+              return `🟢 Inside "${this.escape(f.name)}"`;
+            }
+          } else if (f.type === 'rectangle' && f.coordinates) {
+            const { north, south, east, west } = f.coordinates;
+            if (lastLoc.latitude <= north && lastLoc.latitude >= south && lastLoc.longitude <= east && lastLoc.longitude >= west) {
+              return `🟢 Inside "${this.escape(f.name)}"`;
+            }
+          }
+        }
+      }
+
+      if (device.current_fence && !device.current_fence.includes('No Active Fences') && !device.current_fence.includes('Outside')) {
+        return `🟢 ${device.current_fence}`;
+      }
+
+      return 'Outside Fences';
     }
 
     renderDeviceList() {
@@ -138,26 +248,7 @@
           const lastLoc = device.last_location;
           const coordsStr = lastLoc ? `${lastLoc.latitude.toFixed(4)}°, ${lastLoc.longitude.toFixed(4)}°` : 'No GPS Fix';
           const accStr = (lastLoc && lastLoc.accuracy) ? `±${Math.round(lastLoc.accuracy)}m` : '';
-          let fenceStr = isOutsideForced
-            ? `🚫 Outside (${Math.round(device.distance_outside || 100)}m - Paused)`
-            : (device.current_fence && device.current_fence !== 'No Active Fences' ? `🟢 ${device.current_fence}` : null);
-
-          // Dynamic client-side evaluation against active map geofences
-          if (!fenceStr && lastLoc && window.geofenceApp && window.geofenceApp.store) {
-            const activeFences = window.geofenceApp.store.getActiveGeofences();
-            for (const f of activeFences) {
-              if (f.type === 'circle' && f.coordinates && f.radius) {
-                const d = this.calculateDistance(lastLoc.latitude, lastLoc.longitude, f.coordinates.lat, f.coordinates.lng);
-                if (d <= f.radius) {
-                  fenceStr = `🟢 Inside "${f.name}"`;
-                  break;
-                }
-              }
-            }
-          }
-          if (!fenceStr) {
-            fenceStr = device.current_fence ? `🟢 ${device.current_fence}` : 'Outside Fences';
-          }
+          const fenceStr = this.evaluateDeviceGeofence(device);
           const isHistoryActive = this.activeHistoryDeviceId === device.device_id;
 
           return `
@@ -165,7 +256,7 @@
               <div class="device-header-row">
                 <div class="device-identity">
                   <span class="status-indicator-dot ${statusClass}"></span>
-                  <span class="device-name-text">${this.escape(device.device_name)}</span>
+                  <span class="device-name-text">${this.escape(device.device_name || 'Device')}</span>
                   <span class="device-pill-id">${this.escape(device.device_id)}</span>
                 </div>
                 <span class="device-status-badge ${statusClass}">${statusLabel}</span>
@@ -181,10 +272,10 @@
                   📍 Locate
                 </button>
                 <button type="button" class="btn-device-action ${isHistoryActive ? 'active' : ''}" onclick="window.adminDeviceManager.toggleDeviceHistory('${device.device_id}')" title="View historical path trail">
-                  📈 ${isHistoryActive ? 'Hide Path' : 'Trail'}
+                  📈 ${isHistoryActive ? 'Hide' : 'Trail'}
                 </button>
-                <button type="button" class="btn-device-action danger" onclick="window.adminDeviceManager.revokeDevicePrompt('${device.device_id}')" title="Revoke device access">
-                  ✕ Revoke
+                <button type="button" class="btn-device-action danger" onclick="window.adminDeviceManager.deleteDevicePrompt('${device.device_id}')" title="Delete device and history">
+                  🗑 Delete
                 </button>
               </div>
             </div>
@@ -212,13 +303,15 @@
         let marker = this.deviceMarkers.get(device.device_id);
         let accCircle = this.accuracyCircles.get(device.device_id);
 
+        const labelText = device.device_name || device.device_id;
+
         if (!marker) {
           const icon = L.divIcon({
             className: `real-device-map-marker ${status}`,
             html: `
               <div class="device-marker-pulse" style="background:${color}; box-shadow:0 0 10px ${color}"></div>
               <div class="device-marker-core" style="background:${color}"></div>
-              <div class="device-marker-label">${this.escape(device.device_name)}</div>
+              <div class="device-marker-label">${this.escape(labelText)}</div>
             `,
             iconSize: [28, 28],
             iconAnchor: [14, 14]
@@ -249,7 +342,7 @@
               html: `
                 <div class="device-marker-pulse" style="background:${color}; box-shadow:0 0 10px ${color}"></div>
                 <div class="device-marker-core" style="background:${color}"></div>
-                <div class="device-marker-label">${this.escape(device.device_name)}</div>
+                <div class="device-marker-label">${this.escape(labelText)}</div>
               `,
               iconSize: [28, 28],
               iconAnchor: [14, 14]
@@ -267,7 +360,7 @@
         }
       });
 
-      // Remove deleted markers
+      // Remove deleted/pruned markers immediately
       for (const [id, marker] of this.deviceMarkers.entries()) {
         if (!seenIds.has(id)) {
           this.realDevicesLayer.removeLayer(marker);
@@ -289,12 +382,13 @@
         ? `OFFLINE (${Math.round(device.distance_outside || 100)}m Outside - Paused)`
         : (device.status || 'offline').toUpperCase();
       const lastSeenStr = device.last_seen ? new Date(device.last_seen).toLocaleTimeString() : 'Unknown';
+      const fenceDisplay = this.evaluateDeviceGeofence(device);
 
       return `
         <div class="device-popup-card">
           <div class="popup-title-row">
             <span class="status-indicator-dot ${statusClass}"></span>
-            <strong style="font-size:0.95rem;">${this.escape(device.device_name)}</strong>
+            <strong style="font-size:0.95rem;">${this.escape(device.device_name || 'Device')}</strong>
           </div>
           <div class="popup-id-row">
             <code>${this.escape(device.device_id)}</code> • <span class="badge-${statusClass}">${statusText}</span>
@@ -319,7 +413,7 @@
           </div>
           <div class="popup-fence-row">
             <span class="popup-label">Zone Status:</span>
-            <span style="color:#10b981; font-weight:600;">${device.current_fence || 'Outside Geofences'}</span>
+            <span style="color:#10b981; font-weight:600;">${fenceDisplay}</span>
           </div>
           <div class="popup-time">Last update: ${lastSeenStr}</div>
         </div>
@@ -425,6 +519,22 @@
       this.historyMarkers = [];
       if (this.historyPanel) this.historyPanel.classList.add('hidden');
       this.renderDeviceList();
+    }
+
+    async deleteDevicePrompt(deviceId) {
+      if (!confirm(`Permanently remove device "${deviceId}"? This removes all duplicate copies and history.`)) {
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/devices/${deviceId}`, { method: 'DELETE' });
+        if (res.ok) {
+          if (window.uiController) window.uiController.showToast(`Device ${deviceId} deleted`, 'info');
+          await this.fetchDevices();
+        }
+      } catch (err) {
+        console.warn('Delete error:', err);
+      }
     }
 
     async revokeDevicePrompt(deviceId) {

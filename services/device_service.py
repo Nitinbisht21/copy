@@ -1,25 +1,30 @@
 """
 Device Management Service
-Handles multi-device registration, status derivation (ONLINE/INACTIVE/OFFLINE based on last_seen),
-device revocation, and location history queries.
+Handles multi-device registration, auto-increment numbering ("Device 1", "Device 2"...),
+reconnect recognition (re-assigns previous name & ID to returning phones),
+status derivation (ONLINE/INACTIVE/OFFLINE based on last_seen),
+and single-location deduplication so one physical phone never creates multiple ghost copies.
 """
 
 import os
+import re
 import uuid
+import math
 import time
 from datetime import datetime, timedelta
 
 from services.db import get_tracking_db, in_memory_devices, in_memory_locations, use_mongodb
 
-ONLINE_THRESHOLD_SECONDS = int(os.environ.get('DEVICE_ONLINE_THRESHOLD_SEC', 180)) # 3 minutes, supports 2-min database reporting interval
+ONLINE_THRESHOLD_SECONDS = int(os.environ.get('DEVICE_ONLINE_THRESHOLD_SEC', 180)) # 3 minutes
 INACTIVE_THRESHOLD_SECONDS = int(os.environ.get('DEVICE_INACTIVE_THRESHOLD_SEC', 360)) # 6 minutes
+
+GENERIC_NAMES = {'mobile device', 'mobile phone', 'device', 'phone', 'anonymous', 'anon'}
 
 def compute_device_status(device: dict) -> str:
     """Computes dynamic status: online, inactive, or offline based on last_seen and geofence state."""
     if device.get('revoked'):
         return 'revoked'
 
-    # If device was marked offline because it moved >100m outside the active geofence
     if device.get('is_offline_forced') or device.get('offline_reason') == 'outside_fence_100m':
         return 'offline'
 
@@ -28,7 +33,6 @@ def compute_device_status(device: dict) -> str:
         return 'offline'
 
     try:
-        # Strip trailing Z and parse UTC
         clean_ts = last_seen_str.rstrip('Z')
         last_dt = datetime.fromisoformat(clean_ts)
         diff_sec = (datetime.utcnow() - last_dt).total_seconds()
@@ -42,21 +46,177 @@ def compute_device_status(device: dict) -> str:
     except Exception:
         return 'offline'
 
-def register_device(device_name: str, user_id: str, platform: str = 'browser', custom_id: str = None) -> tuple:
-    """Registers a new tracking device under a user."""
-    name = (device_name or 'Mobile Device').strip()
-    uid = (user_id or 'anonymous').strip()
-    plat = (platform or 'browser').lower().strip()
+def _is_generic_name(name: str) -> bool:
+    """Checks if a name is a generic placeholder or default auto-name."""
+    if not name:
+        return True
+    s = name.strip().lower()
+    if s in GENERIC_NAMES:
+        return True
+    # If it's just "Device N" or "Phone N" or a bare digit like "1", "2"
+    if re.match(r'^(device|phone)?\s*\d+$', s):
+        return True
+    return False
 
-    device_id = (custom_id or f"DEV_{uuid.uuid4().hex[:6].upper()}").strip()
+def _extract_number(val) -> int:
+    """Extracts integer device number from integer or string."""
+    if isinstance(val, int):
+        return val
+    if not val:
+        return 0
+    m = re.search(r'\b(\d+)\b', str(val))
+    return int(m.group(1)) if m else 0
+
+def get_next_device_number() -> int:
+    """
+    Auto-increment function:
+    Determines next device number (1, 2, 3...) based on all registered devices.
+    """
+    seen_numbers = set()
+    all_devs = list(in_memory_devices.values())
+
+    db = get_tracking_db()
+    if db is not None:
+        try:
+            docs = list(db.devices.find({'revoked': {'$ne': True}}, {'_id': 0, 'device_number': 1, 'device_name': 1, 'device_id': 1}))
+            all_devs.extend(docs)
+        except Exception:
+            pass
+
+    for d in all_devs:
+        if d.get('revoked'):
+            continue
+        num = d.get('device_number')
+        if num and isinstance(num, int):
+            seen_numbers.add(num)
+        name_num = _extract_number(d.get('device_name'))
+        if name_num > 0:
+            seen_numbers.add(name_num)
+        id_num = _extract_number(d.get('device_id'))
+        if id_num > 0:
+            seen_numbers.add(id_num)
+
+    if not seen_numbers:
+        return 1
+    return max(seen_numbers) + 1
+
+def find_existing_device(custom_id: str = None, fingerprint: str = None, client_ip: str = None, platform: str = None) -> dict:
+    """
+    Finds an existing registered device for reconnect memory.
+    Prioritizes:
+      1. Exact custom_id / device_id match
+      2. Hardware/Browser fingerprint match
+      3. Matching IP + platform if single recent candidate exists
+    """
+    all_devices = dict(in_memory_devices)
+    db = get_tracking_db()
+    if db is not None:
+        try:
+            for doc in db.devices.find({}, {'_id': 0}):
+                all_devices[doc['device_id']] = doc
+        except Exception:
+            pass
+
+    # 1. Exact ID match
+    if custom_id:
+        c_id = custom_id.strip()
+        if c_id in all_devices:
+            return all_devices[c_id]
+
+    # 2. Fingerprint match
+    if fingerprint and len(fingerprint.strip()) >= 4:
+        fp = fingerprint.strip()
+        for dev in all_devices.values():
+            if dev.get('fingerprint') == fp:
+                return dev
+
+    # 3. IP + platform fallback (if client reconnected without persistent storage)
+    if client_ip and client_ip not in ('127.0.0.1', 'localhost', '::1') and platform:
+        plat = platform.lower().strip()
+        candidates = [d for d in all_devices.values() if d.get('client_ip') == client_ip and d.get('platform') == plat]
+        if len(candidates) == 1:
+            return candidates[0]
+
+    return None
+
+def register_device(
+    device_name: str = None,
+    user_id: str = 'anon_user',
+    platform: str = 'browser',
+    custom_id: str = None,
+    fingerprint: str = None,
+    client_ip: str = None
+) -> tuple:
+    """
+    Registers a tracking device or reconnects an existing physical phone.
+    - If phone has connected previously: Reconnects, preserves previous name & ID, avoids duplicate creation.
+    - If brand new phone: Applies auto-increment function (Device 1, Device 2...), assigns unique ID.
+    """
+    uid = (user_id or 'anon_user').strip()
+    plat = (platform or 'browser').lower().strip()
     now = datetime.utcnow().isoformat() + 'Z'
+    incoming_name = (device_name or '').strip()
+
+    # Check if this physical phone already exists (Reconnect!)
+    existing = find_existing_device(custom_id=custom_id, fingerprint=fingerprint, client_ip=client_ip, platform=plat)
+
+    if existing:
+        # RECONNECT: Keep previous name and previous ID as requested by user!
+        device_id = existing['device_id']
+        prev_name = existing.get('device_name')
+
+        # If incoming name is generic, always preserve previous name
+        if _is_generic_name(incoming_name) or not incoming_name:
+            final_name = prev_name or f"Device {existing.get('device_number', 1)}"
+        else:
+            # User explicitly typed a custom name in modal
+            final_name = incoming_name
+
+        existing['device_name'] = final_name
+        existing['last_seen'] = now
+        existing['updated_at'] = now
+        existing['platform'] = plat
+        existing['revoked'] = False
+        existing['is_offline_forced'] = False
+        if fingerprint:
+            existing['fingerprint'] = fingerprint
+        if client_ip:
+            existing['client_ip'] = client_ip
+
+        in_memory_devices[device_id] = existing
+
+        db = get_tracking_db()
+        if db is not None:
+            try:
+                doc = dict(existing)
+                db.devices.replace_one({'device_id': device_id}, doc, upsert=True)
+            except Exception as e:
+                print(f">> [MongoDB Device Reconnect Error] {e}")
+
+        result = dict(existing)
+        result['status'] = compute_device_status(result)
+        result['reconnected'] = True
+        return result, None
+
+    # BRAND NEW PHONE: Apply Increment Function ("Device 1", "Device 2"...)
+    next_num = get_next_device_number()
+
+    if not incoming_name or _is_generic_name(incoming_name):
+        name = f"Device {next_num}"
+    else:
+        name = incoming_name
+
+    device_id = (custom_id or f"DEV_{next_num:02d}_{uuid.uuid4().hex[:4].upper()}").strip()
 
     device_doc = {
         'device_id': device_id,
+        'device_number': next_num,
         'user_id': uid,
         'device_name': name,
         'platform': plat,
-        'status': 'offline',
+        'fingerprint': fingerprint,
+        'client_ip': client_ip,
+        'status': 'online',
         'is_offline_forced': False,
         'offline_reason': None,
         'distance_outside': 0.0,
@@ -80,10 +240,14 @@ def register_device(device_name: str, user_id: str, platform: str = 'browser', c
 
     result = dict(device_doc)
     result['status'] = compute_device_status(result)
+    result['reconnected'] = False
     return result, None
 
 def get_device(device_id: str) -> dict:
     """Retrieves device by ID with dynamically computed status."""
+    if not device_id:
+        return None
+
     db = get_tracking_db()
     dev = None
     if db is not None:
@@ -103,9 +267,89 @@ def get_device(device_id: str) -> dict:
         return dev_copy
     return None
 
+def deduplicate_devices_list(device_list: list) -> list:
+    """
+    Deduplicates device records so that one physical phone has ONLY ONE record and location.
+    Merges duplicate copies created by page refreshes or re-registrations.
+    """
+    if not device_list:
+        return []
+
+    # Map by primary unique identifier
+    unique_map = {}
+    stale_ids_to_purge = set()
+
+    for dev in device_list:
+        did = dev.get('device_id')
+        fp = dev.get('fingerprint')
+
+        # Generate a grouping key
+        if fp and len(fp) >= 4:
+            key = f"fp_{fp}"
+        else:
+            key = f"id_{did}"
+
+        if key not in unique_map:
+            unique_map[key] = dev
+        else:
+            # A duplicate copy of this device exists! Pick the one with the newest last_seen
+            existing = unique_map[key]
+            existing_ts = existing.get('last_seen') or existing.get('updated_at') or ''
+            current_ts = dev.get('last_seen') or dev.get('updated_at') or ''
+
+            if current_ts >= existing_ts:
+                # Replace with newer, mark old as stale
+                stale_ids_to_purge.add(existing.get('device_id'))
+                # Preserve name if current is generic
+                if _is_generic_name(dev.get('device_name')) and not _is_generic_name(existing.get('device_name')):
+                    dev['device_name'] = existing['device_name']
+                unique_map[key] = dev
+            else:
+                stale_ids_to_purge.add(did)
+
+    # Secondary check: If two devices have identical GPS coordinates (within 15m) and same user/IP, merge them
+    results = list(unique_map.values())
+    deduped = []
+    seen_coords = []
+
+    for dev in results:
+        loc = dev.get('last_location')
+        if loc and isinstance(loc, dict) and loc.get('latitude') and loc.get('longitude'):
+            lat = float(loc['latitude'])
+            lng = float(loc['longitude'])
+            is_dup = False
+            for prev_dev, prev_lat, prev_lng in seen_coords:
+                # Approximate distance in meters
+                d_lat = (lat - prev_lat) * 111320.0
+                d_lng = (lng - prev_lng) * 111320.0 * math.cos(math.radians(lat))
+                dist = math.sqrt(d_lat*d_lat + d_lng*d_lng)
+                if dist < 15.0 and (dev.get('client_ip') == prev_dev.get('client_ip') or dev.get('platform') == prev_dev.get('platform')):
+                    # Virtually identical location from same client -> duplicate copy!
+                    is_dup = True
+                    stale_ids_to_purge.add(dev.get('device_id'))
+                    break
+            if not is_dup:
+                seen_coords.append((dev, lat, lng))
+                deduped.append(dev)
+        else:
+            deduped.append(dev)
+
+    # Clean up purged stale IDs from in-memory cache and DB
+    if stale_ids_to_purge:
+        for sid in stale_ids_to_purge:
+            in_memory_devices.pop(sid, None)
+        db = get_tracking_db()
+        if db is not None:
+            try:
+                db.devices.delete_many({'device_id': {'$in': list(stale_ids_to_purge)}})
+            except Exception:
+                pass
+
+    return deduped
+
 def list_devices(user_id: str = None, include_revoked: bool = False) -> list:
-    """Lists devices, optionally filtering by user_id. Updates status on the fly."""
-    devices = []
+    """Lists unique devices with status. Guarantees 1 physical device = 1 entry."""
+    raw_devices = []
     db = get_tracking_db()
 
     if db is not None:
@@ -119,24 +363,29 @@ def list_devices(user_id: str = None, include_revoked: bool = False) -> list:
             docs = list(db.devices.find(query, {'_id': 0}).sort('last_seen', -1))
             for d in docs:
                 in_memory_devices[d['device_id']] = d
-                d_copy = dict(d)
-                d_copy['status'] = compute_device_status(d_copy)
-                devices.append(d_copy)
-            return devices
+                raw_devices.append(d)
         except Exception as e:
             print(f">> [MongoDB Device List Error] {e}")
 
-    for d in in_memory_devices.values():
-        if user_id and d.get('user_id') != user_id:
-            continue
-        if not include_revoked and d.get('revoked'):
-            continue
+    if not raw_devices:
+        for d in in_memory_devices.values():
+            if user_id and d.get('user_id') != user_id:
+                continue
+            if not include_revoked and d.get('revoked'):
+                continue
+            raw_devices.append(d)
+
+    # Deduplicate so only 1 copy per physical phone is returned
+    deduped = deduplicate_devices_list(raw_devices)
+
+    final_devices = []
+    for d in deduped:
         d_copy = dict(d)
         d_copy['status'] = compute_device_status(d_copy)
-        devices.append(d_copy)
+        final_devices.append(d_copy)
 
-    devices.sort(key=lambda x: x.get('last_seen', ''), reverse=True)
-    return devices
+    final_devices.sort(key=lambda x: x.get('last_seen', ''), reverse=True)
+    return final_devices
 
 def update_device(device_id: str, updates: dict) -> dict:
     """Updates device details."""
@@ -147,7 +396,8 @@ def update_device(device_id: str, updates: dict) -> dict:
     allowed_keys = [
         'device_name', 'platform', 'revoked', 'last_seen', 'last_location',
         'current_fence', 'status', 'is_offline_forced', 'offline_reason',
-        'distance_outside', 'tracking_active'
+        'distance_outside', 'tracking_active', 'fingerprint', 'client_ip',
+        'device_number'
     ]
     for k in allowed_keys:
         if k in updates:
@@ -172,6 +422,11 @@ def update_device(device_id: str, updates: dict) -> dict:
             print(f">> [MongoDB Device Update Error] {e}")
 
     return existing
+
+def purge_all_duplicates() -> int:
+    """Purges all duplicate device copies across the database."""
+    devices = list_devices(include_revoked=False)
+    return len(devices)
 
 def revoke_device(device_id: str) -> bool:
     """Revokes/disables a device so it cannot send further telemetry."""

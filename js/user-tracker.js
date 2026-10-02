@@ -1,7 +1,8 @@
 /**
  * Mobile GPS Tracker Client Engine
  * Transmits real-time HTML5 Geolocation API telemetry to the Flask backend
- * Supports Screen Wake Lock, GPS accuracy estimation, and offline buffering.
+ * Supports Screen Wake Lock, GPS accuracy estimation, hardware/browser fingerprinting,
+ * multi-storage persistence, and automatic reconnect memory.
  */
 
 (function () {
@@ -12,7 +13,8 @@
     DEVICE_ID: 'vf_device_id',
     DEVICE_NAME: 'vf_device_name',
     AUTH_TOKEN: 'vf_auth_token',
-    USER_ID: 'vf_user_id'
+    USER_ID: 'vf_user_id',
+    FINGERPRINT: 'vf_device_fingerprint'
   };
 
   const API = {
@@ -23,12 +25,84 @@
 
   const TELEMETRY_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes (120,000 ms) data footprint interval
 
+  // Multi-tier storage persistence (LocalStorage -> SessionStorage -> Persistent Cookie)
+  function getStoredValue(key) {
+    try {
+      let val = localStorage.getItem(key);
+      if (val && val !== 'null' && val !== 'undefined') return val;
+      val = sessionStorage.getItem(key);
+      if (val && val !== 'null' && val !== 'undefined') return val;
+      const match = document.cookie.match(new RegExp('(?:^|;\\s*)' + key + '=([^;]*)'));
+      if (match) return decodeURIComponent(match[1]);
+    } catch (e) {}
+    return null;
+  }
+
+  function setStoredValue(key, val) {
+    try {
+      if (val !== null && val !== undefined) {
+        localStorage.setItem(key, val);
+        sessionStorage.setItem(key, val);
+        // 1-year persistent cookie with SameSite=Lax for survival across webviews
+        document.cookie = `${key}=${encodeURIComponent(val)}; max-age=31536000; path=/; SameSite=Lax`;
+      } else {
+        localStorage.removeItem(key);
+        sessionStorage.removeItem(key);
+        document.cookie = `${key}=; max-age=0; path=/`;
+      }
+    } catch (e) {}
+  }
+
+  // Generates a deterministic device/browser hardware fingerprint
+  function generateDeviceFingerprint() {
+    let stored = getStoredValue(STORAGE_KEYS.FINGERPRINT);
+    if (stored && stored.startsWith('fp_')) return stored;
+
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 160;
+      canvas.height = 40;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.textBaseline = 'top';
+        ctx.font = "14px 'Arial'";
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = '#f60';
+        ctx.fillRect(125, 1, 62, 20);
+        ctx.fillStyle = '#069';
+        ctx.fillText('VirtualFence#1', 2, 15);
+        ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
+        ctx.fillText('VirtualFence#1', 4, 17);
+      }
+      const canvasHash = canvas.toDataURL ? canvas.toDataURL() : '';
+      const screenData = `${screen.width}x${screen.height}x${screen.colorDepth}x${window.devicePixelRatio || 1}`;
+      const hw = `${navigator.hardwareConcurrency || 4}_${navigator.platform || ''}_${navigator.language || ''}`;
+      const tz = Intl && Intl.DateTimeFormat ? Intl.DateTimeFormat().resolvedOptions().timeZone : '';
+      const raw = `${canvasHash}:::${screenData}:::${hw}:::${tz}`;
+
+      // djb2 hash
+      let hash = 5381;
+      for (let i = 0; i < raw.length; i++) {
+        hash = ((hash << 5) + hash) + raw.charCodeAt(i);
+        hash = hash & hash;
+      }
+      const fp = 'fp_' + Math.abs(hash).toString(36);
+      setStoredValue(STORAGE_KEYS.FINGERPRINT, fp);
+      return fp;
+    } catch (e) {
+      const fallback = 'fp_' + (navigator.userAgent || 'unknown').replace(/\W/g, '').slice(0, 16);
+      setStoredValue(STORAGE_KEYS.FINGERPRINT, fallback);
+      return fallback;
+    }
+  }
+
   class UserTracker {
     constructor() {
-      this.deviceId = localStorage.getItem(STORAGE_KEYS.DEVICE_ID) || null;
-      this.deviceName = localStorage.getItem(STORAGE_KEYS.DEVICE_NAME) || 'Mobile Phone';
-      this.token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN) || null;
-      this.userId = localStorage.getItem(STORAGE_KEYS.USER_ID) || 'anon_user';
+      this.fingerprint = generateDeviceFingerprint();
+      this.deviceId = getStoredValue(STORAGE_KEYS.DEVICE_ID) || null;
+      this.deviceName = getStoredValue(STORAGE_KEYS.DEVICE_NAME) || null;
+      this.token = getStoredValue(STORAGE_KEYS.AUTH_TOKEN) || null;
+      this.userId = getStoredValue(STORAGE_KEYS.USER_ID) || 'anon_user';
 
       this.isTracking = false;
       this.watchId = null;
@@ -127,21 +201,23 @@
     }
 
     async initDevice() {
-      const defaultName = this.deviceName || `Device ${Math.floor(100 + Math.random() * 900)}`;
-      await this.registerDeviceOnBackend(defaultName, this.deviceId);
-      this.deviceBadge.textContent = this.deviceId;
-      this.userDisplayName.textContent = this.deviceName;
-      this.inputDeviceName.value = this.deviceName;
-      this.inputDeviceId.value = this.deviceId;
+      // If returning device, pass its known name and ID.
+      // If new, pass null so the server auto-increments ("Device 1", "Device 2"...)
+      await this.registerDeviceOnBackend(this.deviceName, this.deviceId);
+      if (this.deviceBadge) this.deviceBadge.textContent = this.deviceId || 'CONNECTING...';
+      if (this.userDisplayName) this.userDisplayName.textContent = this.deviceName || 'Connecting...';
+      if (this.inputDeviceName) this.inputDeviceName.value = this.deviceName || '';
+      if (this.inputDeviceId) this.inputDeviceId.value = this.deviceId || '';
     }
 
     async registerDeviceOnBackend(name, customId = null) {
       try {
         const payload = {
-          device_name: name,
+          device_name: name || undefined,
           platform: this.detectPlatform(),
           user_id: this.userId,
-          device_id: customId || this.deviceId
+          device_id: customId || this.deviceId || undefined,
+          fingerprint: this.fingerprint
         };
 
         const res = await fetch(API.REGISTER_DEVICE, {
@@ -154,39 +230,42 @@
           const device = await res.json();
           this.deviceId = device.device_id;
           this.deviceName = device.device_name;
-          localStorage.setItem(STORAGE_KEYS.DEVICE_ID, this.deviceId);
-          localStorage.setItem(STORAGE_KEYS.DEVICE_NAME, this.deviceName);
+          setStoredValue(STORAGE_KEYS.DEVICE_ID, this.deviceId);
+          setStoredValue(STORAGE_KEYS.DEVICE_NAME, this.deviceName);
 
-          this.deviceBadge.textContent = this.deviceId;
-          this.userDisplayName.textContent = this.deviceName;
+          if (this.deviceBadge) this.deviceBadge.textContent = this.deviceId;
+          if (this.userDisplayName) this.userDisplayName.textContent = this.deviceName;
+          if (this.inputDeviceName) this.inputDeviceName.value = this.deviceName;
+          if (this.inputDeviceId) this.inputDeviceId.value = this.deviceId;
+
           this.closeDeviceModal();
-          this.networkStatus.textContent = 'Device Connected & Ready';
+          this.networkStatus.textContent = device.reconnected ? 'Device Reconnected (Identity Preserved)' : 'Device Connected & Ready';
         } else {
           const err = await res.json();
-          alert(`Device registration notice: ${err.error || 'Check server connection'}`);
+          console.warn('Registration notice:', err.error);
         }
       } catch (err) {
-        // In case server is offline, use local id
+        // Fallback for offline initialization
         if (!this.deviceId) {
-          this.deviceId = customId || `DEV_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-          this.deviceName = name;
-          localStorage.setItem(STORAGE_KEYS.DEVICE_ID, this.deviceId);
-          localStorage.setItem(STORAGE_KEYS.DEVICE_NAME, this.deviceName);
-          this.deviceBadge.textContent = this.deviceId;
-          this.userDisplayName.textContent = this.deviceName;
+          this.deviceId = customId || `DEV_${this.fingerprint.slice(3, 9).toUpperCase()}`;
+          this.deviceName = name || 'Device 1';
+          setStoredValue(STORAGE_KEYS.DEVICE_ID, this.deviceId);
+          setStoredValue(STORAGE_KEYS.DEVICE_NAME, this.deviceName);
+          if (this.deviceBadge) this.deviceBadge.textContent = this.deviceId;
+          if (this.userDisplayName) this.userDisplayName.textContent = this.deviceName;
         }
         this.closeDeviceModal();
       }
     }
 
     openDeviceModal() {
-      this.inputDeviceName.value = this.deviceName;
-      this.inputDeviceId.value = this.deviceId || '';
-      this.deviceModal.classList.remove('hidden');
+      if (this.inputDeviceName) this.inputDeviceName.value = this.deviceName || '';
+      if (this.inputDeviceId) this.inputDeviceId.value = this.deviceId || '';
+      if (this.deviceModal) this.deviceModal.classList.remove('hidden');
     }
 
     closeDeviceModal() {
-      this.deviceModal.classList.add('hidden');
+      if (this.deviceModal) this.deviceModal.classList.add('hidden');
     }
 
     // =========================================================================
@@ -266,6 +345,8 @@
       this.lastPosition = {
         device_id: this.deviceId,
         device_name: this.deviceName,
+        fingerprint: this.fingerprint,
+        platform: this.detectPlatform(),
         latitude: Number(latitude.toFixed(6)),
         longitude: Number(longitude.toFixed(6)),
         accuracy: accuracy ? Number(accuracy.toFixed(1)) : 0,
@@ -347,6 +428,18 @@
         if (res.ok) {
           const body = await res.json();
           this.lastSyncTime = Date.now();
+
+          // Sync returned device_id and device_name if backend updated or assigned them
+          if (body.device_id && body.device_id !== this.deviceId) {
+            this.deviceId = body.device_id;
+            setStoredValue(STORAGE_KEYS.DEVICE_ID, this.deviceId);
+            if (this.deviceBadge) this.deviceBadge.textContent = this.deviceId;
+          }
+          if (body.device_name && body.device_name !== this.deviceName) {
+            this.deviceName = body.device_name;
+            setStoredValue(STORAGE_KEYS.DEVICE_NAME, this.deviceName);
+            if (this.userDisplayName) this.userDisplayName.textContent = this.deviceName;
+          }
 
           // Handle 100m outside fence cutoff: device set to offline and tracking paused
           if (body.status === 'offline' || body.tracking_active === false) {
