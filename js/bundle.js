@@ -334,7 +334,28 @@
         if (res.ok) {
           const remoteData = await res.json();
           if (Array.isArray(remoteData)) {
-            this.geofences = remoteData;
+            if (remoteData.length > 0) {
+              const remoteMap = new Map(remoteData.map(f => [f.id, f]));
+              for (const localFence of this.geofences) {
+                if (!remoteMap.has(localFence.id)) {
+                  fetch(API_BASE, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(localFence)
+                  }).catch(() => {});
+                  remoteData.push(localFence);
+                }
+              }
+              this.geofences = remoteData;
+            } else if (this.geofences.length > 0) {
+              for (const localFence of this.geofences) {
+                fetch(API_BASE, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(localFence)
+                }).catch(() => {});
+              }
+            }
             this.saveToStorage();
             this.emit('store:changed', this.geofences);
             if (this.geofences.length > 0 && !this.selectedGeofenceId) {

@@ -307,6 +307,27 @@ def evaluate_point_against_fence(point, fence):
 # MONGODB CRUD OPERATIONS (FETCHED FROM & SENT TO MONGODB)
 # -----------------------------------------------------------------------------
 
+import tempfile
+CACHE_GEOFENCES_FILE = os.path.join(tempfile.gettempdir(), 'vf_geofences_cache.json')
+
+def load_cached_geofences():
+    global in_memory_geofences
+    if os.path.exists(CACHE_GEOFENCES_FILE):
+        try:
+            with open(CACHE_GEOFENCES_FILE, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+                if isinstance(cached, dict):
+                    in_memory_geofences.update(cached)
+        except Exception:
+            pass
+
+def save_cached_geofences():
+    try:
+        with open(CACHE_GEOFENCES_FILE, 'w', encoding='utf-8') as f:
+            json.dump(in_memory_geofences, f)
+    except Exception:
+        pass
+
 def db_list_geofences():
     """Lists all geofences directly from MongoDB simulation_data_db.geofences."""
     if use_mongodb and mongo_simulation_db is not None:
@@ -314,9 +335,12 @@ def db_list_geofences():
             docs = list(mongo_simulation_db.geofences.find({}, {'_id': 0}).sort('created_at', -1))
             for d in docs:
                 in_memory_geofences[d['id']] = d
+            save_cached_geofences()
             return docs
         except Exception as e:
             print(f">> [MongoDB Read Error] {e}")
+    if not in_memory_geofences:
+        load_cached_geofences()
     return list(in_memory_geofences.values())
 
 def db_create_geofence(data):
@@ -350,6 +374,7 @@ def db_create_geofence(data):
     }
 
     in_memory_geofences[fence_id] = fence_dict
+    save_cached_geofences()
 
     if use_mongodb and mongo_simulation_db is not None:
         try:

@@ -138,9 +138,26 @@
           const lastLoc = device.last_location;
           const coordsStr = lastLoc ? `${lastLoc.latitude.toFixed(4)}°, ${lastLoc.longitude.toFixed(4)}°` : 'No GPS Fix';
           const accStr = (lastLoc && lastLoc.accuracy) ? `±${Math.round(lastLoc.accuracy)}m` : '';
-          const fenceStr = isOutsideForced
+          let fenceStr = isOutsideForced
             ? `🚫 Outside (${Math.round(device.distance_outside || 100)}m - Paused)`
-            : (device.current_fence ? `🟢 ${device.current_fence}` : 'Outside Fences');
+            : (device.current_fence && device.current_fence !== 'No Active Fences' ? `🟢 ${device.current_fence}` : null);
+
+          // Dynamic client-side evaluation against active map geofences
+          if (!fenceStr && lastLoc && window.geofenceApp && window.geofenceApp.store) {
+            const activeFences = window.geofenceApp.store.getActiveGeofences();
+            for (const f of activeFences) {
+              if (f.type === 'circle' && f.coordinates && f.radius) {
+                const d = this.calculateDistance(lastLoc.latitude, lastLoc.longitude, f.coordinates.lat, f.coordinates.lng);
+                if (d <= f.radius) {
+                  fenceStr = `🟢 Inside "${f.name}"`;
+                  break;
+                }
+              }
+            }
+          }
+          if (!fenceStr) {
+            fenceStr = device.current_fence ? `🟢 ${device.current_fence}` : 'Outside Fences';
+          }
           const isHistoryActive = this.activeHistoryDeviceId === device.device_id;
 
           return `
@@ -461,6 +478,18 @@
       } else {
         prompt('Copy this tracking URL on your phone:', url);
       }
+    }
+
+    calculateDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371008.8;
+      const toRad = deg => (deg * Math.PI) / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
     }
 
     escape(str) {
