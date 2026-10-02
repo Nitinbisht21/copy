@@ -16,6 +16,7 @@
       this.historyMarkers = [];
       this.activeHistoryDeviceId = null;
       this.pollInterval = null;
+      this.hasAutoCentered = false;
 
       this.initLayersWhenMapReady();
     }
@@ -87,6 +88,15 @@
           this.devices = await res.json();
           this.renderDeviceList();
           this.updateMapMarkers();
+
+          // Auto-center map on active mobile phone when first discovered
+          if (!this.hasAutoCentered && this.devices.length > 0 && this.map) {
+            const firstActive = this.devices.find(d => d.last_location && typeof d.last_location.latitude === 'number' && typeof d.last_location.longitude === 'number');
+            if (firstActive) {
+              this.hasAutoCentered = true;
+              this.map.setView([firstActive.last_location.latitude, firstActive.last_location.longitude], 16);
+            }
+          }
 
           if (showToastNotification && window.uiController) {
             window.uiController.showToast(`Updated ${this.devices.length} registered devices`, 'info');

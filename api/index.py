@@ -59,11 +59,13 @@ def app(environ, start_response):
         clean_path = target_path.split('?')[0]
         if not clean_path.startswith('/'):
             clean_path = '/' + clean_path
+        if clean_path in ('/api/index.py', '/api/index', '/index.py', '/api/'):
+            clean_path = '/api'
         environ['PATH_INFO'] = clean_path
     else:
         curr_path = environ.get('PATH_INFO', '')
         if curr_path in ('/api/index.py', '/api/index', '/index.py', '/api/', '/api', ''):
-            environ['PATH_INFO'] = '/api/devices'
+            environ['PATH_INFO'] = '/api'
         elif not curr_path.startswith('/api/'):
             environ['PATH_INFO'] = '/api' + (curr_path if curr_path.startswith('/') else '/' + curr_path)
 

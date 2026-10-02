@@ -1050,6 +1050,29 @@ def create_app():
             'admin_url': f"http://{ip}:{PORT}/"
         })
 
+    @app.route('/api')
+    @app.route('/api/')
+    @app.route('/api/index')
+    @app.route('/api/index.py')
+    @app.route('/index.py')
+    def api_root_info():
+        return jsonify({
+            'status': 'online',
+            'service': 'Virtual Fence GPS Tracking API',
+            'message': 'API is active and running',
+            'version': '2.0',
+            'admin_url': '/',
+            'track_url': '/track',
+            'endpoints': {
+                'devices': '/api/devices',
+                'telemetry': '/api/telemetry',
+                'geofences': '/api/geofences',
+                'events': '/api/events',
+                'database_status': '/api/database/status',
+                'network_info': '/api/network/info'
+            }
+        })
+
     @app.route('/track')
     @app.route('/user')
     def route_track():
