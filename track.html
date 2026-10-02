@@ -452,94 +452,6 @@
       background: rgba(255, 255, 255, 0.08);
       color: #94a3b8;
     }
-
-    .btn-quick-admin {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      padding: 5px 11px;
-      border-radius: 20px;
-      background: rgba(56, 189, 248, 0.14);
-      border: 1px solid rgba(56, 189, 248, 0.35);
-      color: #38bdf8;
-      text-decoration: none;
-      font-size: 0.76rem;
-      font-weight: 600;
-      transition: all 0.2s ease;
-      white-space: nowrap;
-    }
-
-    .btn-quick-admin:hover {
-      background: rgba(56, 189, 248, 0.28);
-      color: #ffffff;
-      box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
-    }
-
-    .panel-switch-card {
-      background: linear-gradient(135deg, rgba(18, 26, 43, 0.9), rgba(15, 23, 42, 0.9));
-      border: 1px solid rgba(56, 189, 248, 0.25);
-      border-radius: 16px;
-      padding: 1.1rem;
-      display: flex;
-      flex-direction: column;
-      gap: 0.85rem;
-      backdrop-filter: blur(12px);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-    }
-
-    .panel-switch-content {
-      display: flex;
-      align-items: center;
-      gap: 0.85rem;
-    }
-
-    .panel-switch-icon {
-      font-size: 1.7rem;
-      background: rgba(56, 189, 248, 0.12);
-      border: 1px solid rgba(56, 189, 248, 0.3);
-      width: 44px;
-      height: 44px;
-      border-radius: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-    }
-
-    .panel-switch-title {
-      font-weight: 700;
-      font-size: 0.92rem;
-      color: #f1f5f9;
-    }
-
-    .panel-switch-desc {
-      font-size: 0.75rem;
-      color: var(--text-muted);
-      line-height: 1.4;
-      margin-top: 2px;
-    }
-
-    .btn-switch-admin {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.5rem;
-      width: 100%;
-      padding: 0.75rem;
-      background: linear-gradient(135deg, #2563eb, #1d4ed8);
-      color: #ffffff;
-      font-weight: 600;
-      font-size: 0.88rem;
-      border-radius: 11px;
-      text-decoration: none;
-      transition: all 0.2s ease;
-      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
-    }
-
-    .btn-switch-admin:hover {
-      background: linear-gradient(135deg, #3b82f6, #2563eb);
-      box-shadow: 0 0 16px rgba(59, 130, 246, 0.5);
-    }
   </style>
 </head>
 <body>
@@ -573,12 +485,9 @@
         </div>
       </div>
 
-      <div style="display: flex; gap: 0.45rem; align-items: center;">
-        <a href="/" class="btn-quick-admin" title="Open Admin Panel Map Builder">🗺️ Admin Map ↗</a>
-        <button type="button" id="btn-user-profile" class="user-pill" title="Device & Profile Settings">
-          <span id="user-display-name">Connecting...</span>
-        </button>
-      </div>
+      <button type="button" id="btn-user-profile" class="user-pill" title="Device & Profile Settings">
+        <span id="user-display-name">Connecting...</span>
+      </button>
     </header>
 
     <!-- Main Card -->
@@ -684,18 +593,6 @@
         </div>
       </div>
     </main>
-
-    <!-- Admin Panel Quick Link Card -->
-    <aside class="panel-switch-card">
-      <div class="panel-switch-content">
-        <div class="panel-switch-icon">🗺️</div>
-        <div>
-          <div class="panel-switch-title">Admin Geofence Builder</div>
-          <div class="panel-switch-desc">Create circle/polygon boundaries & monitor fleet in real time on the live map</div>
-        </div>
-      </div>
-      <a href="/" class="btn-switch-admin" title="Switch to Admin Geofence Map Builder">Switch to Admin Panel ↗</a>
-    </aside>
   </div>
 
   <!-- Device Registration / Switch Modal -->
