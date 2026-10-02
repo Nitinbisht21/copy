@@ -388,10 +388,176 @@
       color: #fca5a5;
       border: 1px solid rgba(239, 68, 68, 0.3);
     }
+
+    /* Dual-Panel Switcher & Quick Navigation */
+    .panel-nav-switcher {
+      display: flex;
+      align-items: center;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      padding: 4px;
+      border-radius: 14px;
+      gap: 4px;
+      width: 100%;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    }
+
+    .panel-nav-tab {
+      flex: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.45rem;
+      padding: 9px 12px;
+      border-radius: 10px;
+      text-decoration: none;
+      font-size: 0.84rem;
+      font-weight: 600;
+      color: #94a3b8;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      border: 1px solid transparent;
+    }
+
+    .panel-nav-tab:hover {
+      color: #f8fafc;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .panel-nav-tab.active {
+      background: linear-gradient(135deg, rgba(37, 99, 235, 0.35), rgba(16, 185, 129, 0.25));
+      color: #ffffff;
+      border-color: rgba(56, 189, 248, 0.45);
+      box-shadow: 0 0 14px rgba(56, 189, 248, 0.25);
+    }
+
+    .panel-nav-tab .tab-icon {
+      font-size: 0.95rem;
+    }
+
+    .panel-nav-tab .tab-badge {
+      font-size: 0.65rem;
+      padding: 1px 6px;
+      border-radius: 8px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .panel-nav-tab.active .tab-badge {
+      background: rgba(16, 185, 129, 0.3);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.5);
+    }
+
+    .panel-nav-tab:not(.active) .tab-badge {
+      background: rgba(255, 255, 255, 0.08);
+      color: #94a3b8;
+    }
+
+    .btn-quick-admin {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 5px 11px;
+      border-radius: 20px;
+      background: rgba(56, 189, 248, 0.14);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      color: #38bdf8;
+      text-decoration: none;
+      font-size: 0.76rem;
+      font-weight: 600;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+
+    .btn-quick-admin:hover {
+      background: rgba(56, 189, 248, 0.28);
+      color: #ffffff;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+    }
+
+    .panel-switch-card {
+      background: linear-gradient(135deg, rgba(18, 26, 43, 0.9), rgba(15, 23, 42, 0.9));
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      border-radius: 16px;
+      padding: 1.1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    }
+
+    .panel-switch-content {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+    }
+
+    .panel-switch-icon {
+      font-size: 1.7rem;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .panel-switch-title {
+      font-weight: 700;
+      font-size: 0.92rem;
+      color: #f1f5f9;
+    }
+
+    .panel-switch-desc {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+      margin-top: 2px;
+    }
+
+    .btn-switch-admin {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      width: 100%;
+      padding: 0.75rem;
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: #ffffff;
+      font-weight: 600;
+      font-size: 0.88rem;
+      border-radius: 11px;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+    }
+
+    .btn-switch-admin:hover {
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      box-shadow: 0 0 16px rgba(59, 130, 246, 0.5);
+    }
   </style>
 </head>
 <body>
   <div class="tracker-container">
+    <!-- DUAL-PANEL NAVIGATION SWITCHER -->
+    <nav class="panel-nav-switcher" aria-label="Application Navigation">
+      <a href="/" class="panel-nav-tab" title="Geofence Map Builder & Admin Dashboard">
+        <span class="tab-icon">🗺️</span>
+        <span class="tab-text">Admin Panel</span>
+        <span class="tab-badge">Admin</span>
+      </a>
+      <a href="/track" class="panel-nav-tab active" title="Field Mobile GPS Tracker Client">
+        <span class="tab-icon">📱</span>
+        <span class="tab-text">Track Panel</span>
+        <span class="tab-badge">Active</span>
+      </a>
+    </nav>
+
     <!-- Top Header -->
     <header class="brand-header">
       <div class="brand-title-wrap">
@@ -407,9 +573,12 @@
         </div>
       </div>
 
-      <button type="button" id="btn-user-profile" class="user-pill" title="Device & Profile Settings">
-        <span id="user-display-name">Connecting...</span>
-      </button>
+      <div style="display: flex; gap: 0.45rem; align-items: center;">
+        <a href="/" class="btn-quick-admin" title="Open Admin Panel Map Builder">🗺️ Admin Map ↗</a>
+        <button type="button" id="btn-user-profile" class="user-pill" title="Device & Profile Settings">
+          <span id="user-display-name">Connecting...</span>
+        </button>
+      </div>
     </header>
 
     <!-- Main Card -->
@@ -515,6 +684,18 @@
         </div>
       </div>
     </main>
+
+    <!-- Admin Panel Quick Link Card -->
+    <aside class="panel-switch-card">
+      <div class="panel-switch-content">
+        <div class="panel-switch-icon">🗺️</div>
+        <div>
+          <div class="panel-switch-title">Admin Geofence Builder</div>
+          <div class="panel-switch-desc">Create circle/polygon boundaries & monitor fleet in real time on the live map</div>
+        </div>
+      </div>
+      <a href="/" class="btn-switch-admin" title="Switch to Admin Geofence Map Builder">Switch to Admin Panel ↗</a>
+    </aside>
   </div>
 
   <!-- Device Registration / Switch Modal -->

@@ -39,6 +39,20 @@
         <span class="brand-badge">Real-Time GPS Layer</span>
       </div>
 
+      <!-- DUAL-PANEL NAVIGATION SWITCHER -->
+      <nav class="panel-nav-switcher" aria-label="Application Panels">
+        <a href="/" class="panel-nav-tab active" title="Geofence Map Builder & Admin Dashboard">
+          <span class="tab-icon">🗺️</span>
+          <span class="tab-text">Admin Panel</span>
+          <span class="tab-badge">Admin</span>
+        </a>
+        <a href="/track" class="panel-nav-tab" title="Field Mobile GPS Tracker Client">
+          <span class="tab-icon">📱</span>
+          <span class="tab-text">Track Panel</span>
+          <span class="tab-badge">Live</span>
+        </a>
+      </nav>
+
       <!-- Search / Jump to Location -->
       <div class="header-search">
         <div class="search-input-wrapper">
@@ -92,6 +106,15 @@
           </svg>
           <span>Connect Phone</span>
         </button>
+
+        <!-- Direct Track Panel Quick Link -->
+        <a href="/track" target="_blank" class="btn-open-track-panel" title="Open Mobile GPS Field Tracker in a new window/tab">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+            <line x1="12" y1="18" x2="12.01" y2="18"></line>
+          </svg>
+          <span>📱 Open Track Panel ↗</span>
+        </a>
       </div>
     </header>
 
@@ -353,6 +376,15 @@
                 <span id="device-count-badge" class="count-pill" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.35);">0/0</span>
                 <button type="button" id="btn-refresh-devices" class="btn-log-action" title="Refresh registered devices">↻</button>
               </div>
+            </div>
+
+            <!-- Direct Launch Track Panel Helper -->
+            <div class="tracker-launch-card">
+              <div class="tracker-launch-info">
+                <span class="tracker-launch-title">📱 Field Mobile Tracker</span>
+                <span class="tracker-launch-sub">Stream phone GPS coordinates to this map</span>
+              </div>
+              <a href="/track" target="_blank" class="btn-sidebar-track" title="Open Field Tracker Client">Launch ↗</a>
             </div>
 
             <div id="admin-device-list" class="admin-device-list-box">
