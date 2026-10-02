@@ -990,6 +990,15 @@ def create_app():
 
     @app.route('/api/network/info', methods=['GET'])
     def api_network_info():
+        host = request.headers.get('x-forwarded-host') or request.host
+        proto = request.headers.get('x-forwarded-proto') or ('https' if os.environ.get('VERCEL') else 'http')
+        if os.environ.get('VERCEL') or (host and 'vercel.app' in host):
+            return jsonify({
+                'local_ip': host,
+                'port': 443,
+                'track_url': f"{proto}://{host}/track",
+                'admin_url': f"{proto}://{host}/"
+            })
         ip = get_local_ip()
         return jsonify({
             'local_ip': ip,
