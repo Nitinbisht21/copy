@@ -328,6 +328,13 @@ def save_cached_geofences():
     except Exception:
         pass
 
+def clear_cached_geofences():
+    try:
+        if os.path.exists(CACHE_GEOFENCES_FILE):
+            os.remove(CACHE_GEOFENCES_FILE)
+    except Exception:
+        pass
+
 def db_list_geofences():
     """Lists all geofences directly from MongoDB simulation_data_db.geofences."""
     if use_mongodb and mongo_simulation_db is not None:
@@ -423,12 +430,14 @@ def db_update_geofence(fence_id, data):
         except Exception as e:
             print(f">> [MongoDB Update Error] {e}")
 
+    save_cached_geofences()
     return updated
 
 def db_delete_geofence(fence_id):
     """Deletes a geofence directly from MongoDB simulation_data_db.geofences."""
     deleted = fence_id in in_memory_geofences
     in_memory_geofences.pop(fence_id, None)
+    save_cached_geofences()
 
     if use_mongodb and mongo_simulation_db is not None:
         try:
@@ -459,6 +468,7 @@ def db_toggle_geofence(fence_id):
 def db_clear_all():
     """Clears all geofences directly from MongoDB simulation_data_db.geofences."""
     in_memory_geofences.clear()
+    clear_cached_geofences()
     if use_mongodb and mongo_simulation_db is not None:
         try:
             mongo_simulation_db.geofences.delete_many({})

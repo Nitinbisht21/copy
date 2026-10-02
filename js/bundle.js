@@ -334,33 +334,11 @@
         if (res.ok) {
           const remoteData = await res.json();
           if (Array.isArray(remoteData)) {
-            if (remoteData.length > 0) {
-              const remoteMap = new Map(remoteData.map(f => [f.id, f]));
-              for (const localFence of this.geofences) {
-                if (!remoteMap.has(localFence.id)) {
-                  fetch(API_BASE, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(localFence)
-                  }).catch(() => {});
-                  remoteData.push(localFence);
-                }
-              }
-              this.geofences = remoteData;
-            } else if (this.geofences.length > 0) {
-              for (const localFence of this.geofences) {
-                fetch(API_BASE, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(localFence)
-                }).catch(() => {});
-              }
-            }
+            // Backend is the single source of truth; never re-create deleted fences
+            this.geofences = remoteData;
             this.saveToStorage();
             this.emit('store:changed', this.geofences);
-            if (this.geofences.length > 0 && !this.selectedGeofenceId) {
-              this.setSelected(this.geofences[0].id);
-            }
+            // Do NOT auto-select any geofence on load / sync
           }
         }
       } catch (e) {
@@ -805,7 +783,7 @@
       } else {
         if (mode === DrawingMode.CIRCLE) {
           this.draftState.type = GeofenceType.CIRCLE;
-          this.draftState.circle.radius = 200;
+          this.draftState.circle.radius = null;
         } else if (mode === DrawingMode.RECTANGLE) {
           this.draftState.type = GeofenceType.RECTANGLE;
         } else if (mode === DrawingMode.POLYGON) {
@@ -825,7 +803,7 @@
       this.handlesLayerGroup.clearLayers();
       this.draftState = {
         type: null,
-        circle: { center: null, radius: 200 },
+        circle: { center: null, radius: null },
         rectangle: { corner1: null, corner2: null, north: null, south: null, east: null, west: null },
         polygon: { points: [] }
       };
@@ -844,12 +822,11 @@
       }
     }
 
-
-
     // Circle
     setCircleCenter(lat, lng, radius = null) {
       const center = { lat: Number(lat), lng: Number(lng) };
-      const r = radius !== null ? Number(radius) : (this.draftState.circle.radius || 200);
+      const inputRadius = parseFloat(document.getElementById('circle-radius')?.value);
+      const r = radius !== null ? Number(radius) : (inputRadius && !isNaN(inputRadius) ? inputRadius : (this.draftState.circle.radius || 200));
 
       this.draftState.type = GeofenceType.CIRCLE;
       this.draftState.circle.center = center;
@@ -1687,11 +1664,10 @@
       this.bindStoreEvents();
       this.renderSavedList();
 
-      const first = this.store.getAll()[0];
-      if (first) {
-        this.store.setSelected(first.id);
-      }
-      this.enterExploreMode();
+      // Do not auto-select any fence on startup so admin panel opens completely clean
+      this.store.selectedGeofenceId = null;
+      this.enterExploreMode(true);
+      this.showDetailsEmptyState();
       // Start fresh without past clutter on map; past logs can be refreshed manually via ↻ button
       this.loadDatabaseStatus();
       setInterval(() => this.loadDatabaseStatus(), 8000);
@@ -2208,7 +2184,7 @@
     resetModeFormValues() {
       this.inputCircleLat.value = '';
       this.inputCircleLng.value = '';
-      this.inputCircleRadius.value = '200';
+      this.inputCircleRadius.value = '';
       this.sliderCircleRadius.value = '200';
 
       this.inputRectNorth.value = '';
@@ -2216,9 +2192,11 @@
       this.inputRectEast.value = '';
       this.inputRectWest.value = '';
 
+      if (this.inputFenceName) this.inputFenceName.value = '';
+      if (this.inputFenceDesc) this.inputFenceDesc.value = '';
+
       this.polygonPointsCount.textContent = '0';
       this.polygonPointsList.innerHTML = '<div class="empty-hint">No vertices added yet. Click map to add.</div>';
-
     }
 
     handleDraftChange(draft) {
