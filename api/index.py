@@ -66,8 +66,8 @@ def app(environ, start_response):
         curr_path = environ.get('PATH_INFO', '')
         if curr_path in ('/api/index.py', '/api/index', '/index.py', '/api/', '/api', ''):
             environ['PATH_INFO'] = '/api'
-        elif not curr_path.startswith('/api/'):
-            environ['PATH_INFO'] = '/api' + (curr_path if curr_path.startswith('/') else '/' + curr_path)
+        else:
+            environ['PATH_INFO'] = curr_path if curr_path.startswith('/') else '/' + curr_path
 
     environ['SCRIPT_NAME'] = ''
     return flask_app(environ, start_response)

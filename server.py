@@ -778,7 +778,7 @@ def create_app():
         # Exempt all API routes, internal functions, and core app pages
         if (not path or
             path.startswith('api') or
-            path in ('track', 'user', 'admin', 'index.py', 'api/index.py') or
+            path in ('track', 'track.html', 'user', 'admin', 'index.html', 'index.py', 'api/index.py') or
             path.startswith(('geofences', 'footprints', 'telemetry', 'devices', 'events', 'auth', 'database', 'network'))):
             return None
 
@@ -1074,23 +1074,34 @@ def create_app():
         })
 
     @app.route('/track')
+    @app.route('/track.html')
+    @app.route('/api/track')
+    @app.route('/api/track.html')
     @app.route('/user')
     def route_track():
-        return send_from_directory('.', 'track.html')
+        return send_from_directory(STATIC_DIR, 'track.html')
 
     @app.route('/admin')
+    @app.route('/api/admin')
     def route_admin():
-        return send_from_directory('.', 'index.html')
+        return send_from_directory(STATIC_DIR, 'index.html')
 
     @app.route('/')
+    @app.route('/index.html')
+    @app.route('/api/index.html')
     def root():
-        return send_from_directory('.', 'index.html')
+        return send_from_directory(STATIC_DIR, 'index.html')
 
     @app.route('/<path:p>')
     def files(p):
-        if not is_safe_static_request(p):
+        clean_p = p.replace('\\', '/').strip('/')
+        if clean_p in ('track', 'track.html', 'user'):
+            return send_from_directory(STATIC_DIR, 'track.html')
+        if clean_p in ('admin', 'index.html'):
+            return send_from_directory(STATIC_DIR, 'index.html')
+        if not is_safe_static_request(clean_p):
             return jsonify({'error': 'Access denied: Source code and internal configuration files are protected.'}), 403
-        return send_from_directory('.', p)
+        return send_from_directory(STATIC_DIR, clean_p)
 
     return app
 
