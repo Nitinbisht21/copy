@@ -1,8 +1,8 @@
-# Geofence Map Builder - Python Backend Requirements
+# Geofence Map Builder & Real GPS Multi-Device Tracking Backend
 #
-# Exclusively Powered by MongoDB & MongoDB Compass:
+# Powered by MongoDB & MongoDB Compass:
 #   - Database 1: simulation_data_db (geofences, simulation_footprints)
-#   - Database 2: dummy_data_db (dummy_footprints)
+#   - Database 2: tracking_data_db (users, devices, locations, geofence_events)
 #
 # To install:
 #   python -m venv venv

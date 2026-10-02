@@ -1,29 +1,25 @@
 """
-Geofence Map Builder - Python Backend
-Exclusively Powered by MongoDB (MongoDB Atlas & MongoDB Compass)
+Geofence Map Builder & Real GPS Multi-Device Tracking Backend
+Powered by MongoDB Atlas & MongoDB Compass
 
 Features:
-  - Exclusively uses MongoDB (No SQLite or local file dumps)
-  - All data is fetched from MongoDB and sent to MongoDB
-  - Dedicated MongoDB Databases:
-      1. 'simulation_data_db': Stores geofence perimeters, real-time mouse telemetry, and simulation events.
-      2. 'dummy_data_db': Stores generated area dummy data including full ENTER, INSIDE, and EXIT event sequences.
-  - Generates realistic dummy movement sequences:
-      - ENTER: Boundary entry flag event
-      - INSIDE: Core operational waypoint
-      - EXIT: Boundary exit flag event
-  - Real-time Mouse Telemetry Engine:
-      - Records mouse cursor movement, fence crossing (ENTER/EXIT), and mouse click events to MongoDB.
+  - Real-time Multi-Device GPS Telemetry Ingestion:
+      - Ingestion pipeline for mobile phones and external GPS devices
+      - Evaluates real geofences (Circle, Rectangle, Polygon) using spherical mathematics
+      - Persistent ENTER/EXIT boundary breach detection
+  - Exclusively uses MongoDB (No SQLite or local file dumps):
+      1. 'simulation_data_db': Stores geofence perimeters and live footprints.
+      2. 'tracking_data_db': Stores users, devices, locations (GeoJSON 2dsphere), and geofence_events.
   - REST API:
       - /api/geofences (GET, POST, DELETE)
-      - /api/geofences/sample (POST to seed/restore sample fences in MongoDB)
       - /api/geofences/<id> (PUT, DELETE)
       - /api/geofences/<id>/toggle (POST)
       - /api/geofences/export (GET GeoJSON)
-      - /api/telemetry/evaluate (POST real-time GPS evaluation)
-      - /api/footprints (GET, POST, DELETE)
-      - /api/simulation/generate (POST to generate & store ENTER, INSIDE, EXIT dummy data in MongoDB)
-      - /api/database/status (GET live MongoDB Atlas/Compass status)
+      - /api/auth/register, /api/auth/login
+      - /api/devices, /api/devices/register, /api/devices/<id>/history
+      - /api/telemetry (POST real mobile GPS coordinates)
+      - /api/events (GET real boundary transition events)
+      - /api/database/status (GET live MongoDB status)
   - Dual Web Server: Flask if available; built-in http.server fallback
 """
 
@@ -67,188 +63,74 @@ try:
 except ImportError:
     pymongo = None
 
+# Real GPS Multi-Device Tracking Services
+try:
+    from services.db import init_tracking_db
+    from services.auth_service import (
+        register_user, login_user, seed_default_admin,
+        get_current_user
+    )
+    from services.device_service import (
+        register_device, list_devices, get_device, update_device,
+        revoke_device, delete_device, get_device_history
+    )
+    from services.telemetry_service import (
+        process_telemetry, list_geofence_events, distance_to_fence
+    )
+except ImportError as e:
+    print(f">> [Services Import Warning] {e}")
+
 PORT = int(os.environ.get('PORT', 5000))
 MONGODB_URI = os.environ.get(
     'MONGODB_URI',
-    'mongodb://localhost:27017'
+    'mongodb+srv://nitinbisht2030_db_user:l31tSFIKQCYDa2H1@cluster0.tel123h.mongodb.net/?retryWrites=true&w=majority'
 )
 MONGODB_SIMULATION_DB = os.environ.get('MONGODB_SIMULATION_DB', 'simulation_data_db')
-MONGODB_DUMMY_DB = os.environ.get('MONGODB_DUMMY_DB', 'dummy_data_db')
 STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
 EARTH_RADIUS_METERS = 6371008.8
 
+import socket
+
+def get_local_ip():
+    """Detects primary local LAN IPv4 address for multi-device Wi-Fi tracking."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return '127.0.0.1'
+
 # MongoDB Global State (Sole Database)
 mongo_client = None
-mongo_simulation_db = None  # DB 1: simulation_data_db (geofences, simulation_footprints)
-mongo_dummy_db = None       # DB 2: dummy_data_db (dummy_footprints)
+mongo_simulation_db = None  # geofences, real-time events & footprints
 use_mongodb = False
 mongo_connection_error = None
 
 # Fast Local Cache (Synchronized with MongoDB)
 in_memory_geofences = {}
 in_memory_simulation_footprints = []
-in_memory_dummy_footprints = []
 device_last_known_geofences = {}
 
 # -----------------------------------------------------------------------------
-# SAMPLE DATA DEFINITIONS (STORED EXCLUSIVELY IN MONGODB)
-# -----------------------------------------------------------------------------
-SAMPLE_GEOFENCES = [
-    {
-        'id': 'geo_demo_alpha',
-        'name': 'Demo Alpha Perimeter',
-        'type': 'circle',
-        'coordinates': {'lat': 30.123456, 'lng': 78.123456},
-        'radius': 320.0,
-        'status': 'active',
-        'color': '#2563eb',
-        'description': 'Auto-generated demo circular perimeter with real-time telemetry',
-        'created_at': '2026-09-28T12:00:00.000Z',
-        'updated_at': '2026-09-28T12:00:00.000Z'
-    },
-    {
-        'id': 'geo_demo_depot',
-        'name': 'Demo Sector B Depot',
-        'type': 'rectangle',
-        'coordinates': {
-            'north': 30.132456,
-            'south': 30.128456,
-            'east': 78.135456,
-            'west': 78.129456
-        },
-        'radius': None,
-        'status': 'active',
-        'color': '#10b981',
-        'description': 'Auto-generated demo logistics facility perimeter with vehicle tracking',
-        'created_at': '2026-09-28T12:01:00.000Z',
-        'updated_at': '2026-09-28T12:01:00.000Z'
-    },
-    {
-        'id': 'geo_default_headquarters',
-        'name': 'Headquarters Security Zone',
-        'type': 'circle',
-        'coordinates': {'lat': 30.118000, 'lng': 78.115000},
-        'radius': 200.0,
-        'status': 'active',
-        'color': '#8b5cf6',
-        'description': 'Primary facility security perimeter (200m zone)',
-        'created_at': '2026-09-28T12:02:00.000Z',
-        'updated_at': '2026-09-28T12:02:00.000Z'
-    }
-]
-
-# -----------------------------------------------------------------------------
-# MONGODB CONNECTION & AUTO-SEEDING
+# MONGODB CONNECTION & CACHE SYNCHRONIZATION
 # -----------------------------------------------------------------------------
 
-def seed_sample_data_in_mongodb():
-    """Seeds sample geofences and initial ENTER/EXIT footprints directly into MongoDB."""
-    global mongo_simulation_db, mongo_dummy_db
+def sync_geofences_from_mongodb():
+    """Synchronizes stored geofences directly from MongoDB into local memory cache."""
+    global mongo_simulation_db
     if mongo_simulation_db is None:
         return
 
-    now = datetime.utcnow().isoformat() + 'Z'
-
-    # 1. Seed Sample Geofences into simulation_data_db.geofences if empty
-    fence_count = mongo_simulation_db.geofences.count_documents({})
-    if fence_count == 0:
-        for f in SAMPLE_GEOFENCES:
-            f_copy = dict(f)
-            f_copy['updated_at'] = now
-            mongo_simulation_db.geofences.replace_one({'id': f_copy['id']}, f_copy, upsert=True)
-            in_memory_geofences[f_copy['id']] = f_copy
-        print(f">> [MongoDB] Seeded {len(SAMPLE_GEOFENCES)} sample geofences into '{MONGODB_SIMULATION_DB}.geofences'")
-    else:
-        for doc in mongo_simulation_db.geofences.find({}, {'_id': 0}):
-            in_memory_geofences[doc['id']] = doc
-
-    # 2. Seed initial Simulation Footprints into simulation_data_db.simulation_footprints if empty
-    if mongo_simulation_db.simulation_footprints.count_documents({}) == 0:
-        sim_seeds = [
-            {
-                'id': 'sim_seed_alpha_enter',
-                'device_id': 'PATROL_ALPHA',
-                'geofence_id': 'geo_demo_alpha',
-                'geofence_name': 'Demo Alpha Perimeter',
-                'latitude': 30.123456,
-                'longitude': 78.123456,
-                'event': 'ENTER',
-                'color': '#2563eb',
-                'source': 'simulation_loop',
-                'database': MONGODB_SIMULATION_DB,
-                'collection': 'simulation_footprints',
-                'created_at': (datetime.utcnow() - timedelta(minutes=2)).isoformat() + 'Z'
-            },
-            {
-                'id': 'sim_seed_alpha_inside',
-                'device_id': 'PATROL_ALPHA',
-                'geofence_id': 'geo_demo_alpha',
-                'geofence_name': 'Demo Alpha Perimeter',
-                'latitude': 30.124200,
-                'longitude': 78.123800,
-                'event': 'INSIDE',
-                'color': '#2563eb',
-                'source': 'simulation_loop',
-                'database': MONGODB_SIMULATION_DB,
-                'collection': 'simulation_footprints',
-                'created_at': (datetime.utcnow() - timedelta(minutes=1)).isoformat() + 'Z'
-            }
-        ]
-        mongo_simulation_db.simulation_footprints.insert_many(sim_seeds)
-        print(f">> [MongoDB] Seeded initial simulation footprints into '{MONGODB_SIMULATION_DB}.simulation_footprints'")
-
-    # 3. Seed initial Dummy Footprints with ENTER, INSIDE, and EXIT into dummy_data_db if empty
-    if mongo_dummy_db is not None and mongo_dummy_db.dummy_footprints.count_documents({}) == 0:
-        dummy_seeds = [
-            {
-                'id': 'dummy_seed_depot_enter',
-                'device_id': 'SCOUT_UNIT_02',
-                'geofence_id': 'geo_demo_depot',
-                'geofence_name': 'Demo Sector B Depot',
-                'latitude': 30.128456,
-                'longitude': 78.129456,
-                'event': 'ENTER',
-                'color': '#10b981',
-                'source': 'area_dummy_generator',
-                'database': MONGODB_DUMMY_DB,
-                'collection': 'dummy_footprints',
-                'created_at': (datetime.utcnow() - timedelta(minutes=3)).isoformat() + 'Z'
-            },
-            {
-                'id': 'dummy_seed_depot_inside',
-                'device_id': 'SCOUT_UNIT_02',
-                'geofence_id': 'geo_demo_depot',
-                'geofence_name': 'Demo Sector B Depot',
-                'latitude': 30.130456,
-                'longitude': 78.132456,
-                'event': 'INSIDE',
-                'color': '#10b981',
-                'source': 'area_dummy_generator',
-                'database': MONGODB_DUMMY_DB,
-                'collection': 'dummy_footprints',
-                'created_at': (datetime.utcnow() - timedelta(minutes=2)).isoformat() + 'Z'
-            },
-            {
-                'id': 'dummy_seed_depot_exit',
-                'device_id': 'SCOUT_UNIT_02',
-                'geofence_id': 'geo_demo_depot',
-                'geofence_name': 'Demo Sector B Depot',
-                'latitude': 30.132456,
-                'longitude': 78.135456,
-                'event': 'EXIT',
-                'color': '#10b981',
-                'source': 'area_dummy_generator',
-                'database': MONGODB_DUMMY_DB,
-                'collection': 'dummy_footprints',
-                'created_at': (datetime.utcnow() - timedelta(minutes=1)).isoformat() + 'Z'
-            }
-        ]
-        mongo_dummy_db.dummy_footprints.insert_many(dummy_seeds)
-        print(f">> [MongoDB] Seeded initial dummy [ENTER, INSIDE, EXIT] records into '{MONGODB_DUMMY_DB}.dummy_footprints'")
+    for doc in mongo_simulation_db.geofences.find({}, {'_id': 0}):
+        in_memory_geofences[doc['id']] = doc
+    print(f">> [MongoDB] Synchronized {len(in_memory_geofences)} active geofences from '{MONGODB_SIMULATION_DB}.geofences'")
 
 def init_mongo_connection(silent=False):
     """Initializes connection to MongoDB Atlas / Compass. MongoDB is the sole database."""
-    global mongo_client, mongo_simulation_db, mongo_dummy_db, use_mongodb, mongo_connection_error
+    global mongo_client, mongo_simulation_db, use_mongodb, mongo_connection_error
 
     if pymongo is None:
         mongo_connection_error = "Python package 'pymongo' is not installed. Please run: pip install pymongo dnspython"
@@ -280,7 +162,6 @@ def init_mongo_connection(silent=False):
             client.admin.command('ping')
             mongo_client = client
             mongo_simulation_db = client[MONGODB_SIMULATION_DB]
-            mongo_dummy_db = client[MONGODB_DUMMY_DB]
             use_mongodb = True
             mongo_connection_error = None
 
@@ -289,20 +170,20 @@ def init_mongo_connection(silent=False):
             mongo_simulation_db.simulation_footprints.create_index('id', unique=True)
             mongo_simulation_db.simulation_footprints.create_index([('created_at', pymongo.DESCENDING)])
 
-            mongo_dummy_db.dummy_footprints.create_index('id', unique=True)
-            mongo_dummy_db.dummy_footprints.create_index([('created_at', pymongo.DESCENDING)])
-
             print(">> [MongoDB] ==================================================")
             print(">> [MongoDB] Live MongoDB Connection Active!")
-            print(f">> [MongoDB] 1. Simulation DB (Live data & mouse): '{MONGODB_SIMULATION_DB}'")
+            print(f">> [MongoDB] Geofence & Telemetry DB: '{MONGODB_SIMULATION_DB}'")
             print(f">> [MongoDB]    Collections: 'geofences', 'simulation_footprints'")
-            print(f">> [MongoDB] 2. Dummy Data DB (Area ENTER/EXIT):   '{MONGODB_DUMMY_DB}'")
-            print(f">> [MongoDB]    Collections: 'dummy_footprints'")
             print(f">> [MongoDB] Connected URI: {uri}")
             print(">> [MongoDB] ==================================================")
 
-            # Seed sample data into MongoDB
-            seed_sample_data_in_mongodb()
+            # Sync stored geofences into cache
+            sync_geofences_from_mongodb()
+            try:
+                init_tracking_db(mongo_client)
+                seed_default_admin()
+            except Exception as e:
+                print(f">> [Tracking DB Init Note] {e}")
             return True
         except Exception as e:
             last_error = e
@@ -338,6 +219,11 @@ def init_db():
     """Sole database initializer: Connects exclusively to MongoDB."""
     if not use_mongodb or mongo_client is None:
         init_mongo_connection()
+    try:
+        init_tracking_db(mongo_client)
+        seed_default_admin()
+    except Exception as e:
+        pass
     if not os.environ.get('VERCEL'):
         start_mongo_heartbeat()
 
@@ -539,21 +425,6 @@ def db_clear_all():
         except Exception as e:
             print(f">> [MongoDB Clear Error] {e}")
 
-def db_seed_sample_geofences():
-    """Explicitly seeds/resets sample geofences directly into MongoDB."""
-    now = datetime.utcnow().isoformat() + 'Z'
-    results = []
-    for f in SAMPLE_GEOFENCES:
-        f_copy = dict(f)
-        f_copy['updated_at'] = now
-        in_memory_geofences[f_copy['id']] = f_copy
-        if use_mongodb and mongo_simulation_db is not None:
-            try:
-                mongo_simulation_db.geofences.replace_one({'id': f_copy['id']}, f_copy, upsert=True)
-            except Exception as e:
-                print(f">> [MongoDB Seed Error] {e}")
-        results.append(f_copy)
-    return results
 
 def db_export_geojson():
     """Exports all stored geofences as GeoJSON FeatureCollection."""
@@ -654,10 +525,31 @@ def evaluate_telemetry(data):
         # Record boundary transition to MongoDB simulation database
         db_record_footprint(ev)
 
+    # Calculate distance to active fences
+    min_dist_to_fence = 0.0
+    is_outside_100m = False
+    active_fences = [f for f in all_fences if f.get('status') == 'active']
+
+    if active_fences:
+        if currently_inside:
+            min_dist_to_fence = 0.0
+            is_outside_100m = False
+        else:
+            try:
+                distances = [distance_to_fence(point, f) for f in active_fences]
+                min_dist_to_fence = min(distances) if distances else 0.0
+                if min_dist_to_fence > 100.0:
+                    is_outside_100m = True
+            except Exception:
+                pass
+
     return {
         'device_id': device_id,
         'coordinate': {'latitude': lat, 'longitude': lng},
-        'inside_geofences': inside_details,
+        'status': 'offline' if is_outside_100m else 'online',
+        'tracking_active': not is_outside_100m,
+        'distance_outside': round(min_dist_to_fence, 1),
+        'inside_geofences': [] if is_outside_100m else inside_details,
         'events': events
     }
 
@@ -667,23 +559,18 @@ def evaluate_telemetry(data):
 
 def db_record_footprint(data):
     """
-    Stores footprint records exclusively in MongoDB:
-      - Dummy area records (source == 'area_dummy_generator' or dummy in source) -> dummy_data_db.dummy_footprints
-      - Mouse data & simulation records -> simulation_data_db.simulation_footprints
+    Stores footprint and geofence boundary events directly in MongoDB:
+    Persistent collection: simulation_data_db.simulation_footprints
     """
     fid = data.get('id') or f"fp_{int(datetime.utcnow().timestamp()*1000)}_{uuid.uuid4().hex[:6]}"
     now = datetime.utcnow().isoformat() + 'Z'
-    device_id = str(data.get('device_id', 'MOUSE_POINTER'))
+    device_id = str(data.get('device_id', 'GPS_DEVICE'))
     geofence_id = data.get('geofence_id')
     geofence_name = data.get('geofence_name')
     latitude = float(data.get('latitude', 0.0))
     longitude = float(data.get('longitude', 0.0))
     event = str(data.get('event', 'INSIDE')).upper()
-    source = str(data.get('source', 'mouse_live_telemetry'))
-
-    is_dummy = (source == 'area_dummy_generator' or 'dummy' in source.lower() or data.get('is_dummy'))
-    target_db_name = MONGODB_DUMMY_DB if is_dummy else MONGODB_SIMULATION_DB
-    target_coll_name = 'dummy_footprints' if is_dummy else 'simulation_footprints'
+    source = str(data.get('source', 'gps_telemetry'))
 
     color = data.get('color')
     if not color and geofence_id:
@@ -701,104 +588,79 @@ def db_record_footprint(data):
         'event': event,
         'color': color or '#2563eb',
         'source': source,
-        'database': target_db_name,
-        'collection': target_coll_name,
+        'database': MONGODB_SIMULATION_DB,
+        'collection': 'simulation_footprints',
         'created_at': now
     }
 
     # Store in memory cache
-    if is_dummy:
-        in_memory_dummy_footprints.insert(0, record)
-        if len(in_memory_dummy_footprints) > 300:
-            in_memory_dummy_footprints.pop()
-    else:
-        in_memory_simulation_footprints.insert(0, record)
-        if len(in_memory_simulation_footprints) > 300:
-            in_memory_simulation_footprints.pop()
+    in_memory_simulation_footprints.insert(0, record)
+    if len(in_memory_simulation_footprints) > 300:
+        in_memory_simulation_footprints.pop()
 
     # Store in MongoDB (Atlas & Compass)
-    if use_mongodb:
+    if use_mongodb and mongo_simulation_db is not None:
         try:
             doc = dict(record)
             doc.pop('_id', None)
-            if is_dummy and mongo_dummy_db is not None:
-                mongo_dummy_db.dummy_footprints.insert_one(doc)
-            elif mongo_simulation_db is not None:
-                mongo_simulation_db.simulation_footprints.insert_one(doc)
+            mongo_simulation_db.simulation_footprints.insert_one(doc)
         except Exception as e:
             print(f">> [MongoDB Footprint Write Error] {e}")
 
     return record
 
 def db_list_footprints(limit=50, target='all'):
-    """Lists footprints directly from MongoDB simulation & dummy databases."""
-    docs = []
+    """Lists footprints directly from MongoDB."""
     limit = int(limit)
 
-    if use_mongodb:
+    if use_mongodb and mongo_simulation_db is not None:
         try:
-            if target in ('all', 'simulation') and mongo_simulation_db is not None:
-                sim_docs = list(mongo_simulation_db.simulation_footprints.find({}, {'_id': 0}).sort('created_at', -1).limit(limit))
-                for d in sim_docs:
-                    d['database'] = MONGODB_SIMULATION_DB
-                    d['collection'] = 'simulation_footprints'
-                docs.extend(sim_docs)
-            if target in ('all', 'dummy') and mongo_dummy_db is not None:
-                dummy_docs = list(mongo_dummy_db.dummy_footprints.find({}, {'_id': 0}).sort('created_at', -1).limit(limit))
-                for d in dummy_docs:
-                    d['database'] = MONGODB_DUMMY_DB
-                    d['collection'] = 'dummy_footprints'
-                docs.extend(dummy_docs)
-            docs.sort(key=lambda x: x.get('created_at', ''), reverse=True)
-            return docs[:limit]
+            docs = list(mongo_simulation_db.simulation_footprints.find({}, {'_id': 0}).sort('created_at', -1).limit(limit))
+            for d in docs:
+                d['database'] = MONGODB_SIMULATION_DB
+                d['collection'] = 'simulation_footprints'
+            return docs
         except Exception as e:
             print(f">> [MongoDB List Footprints Error] {e}")
 
-    # Fallback to in-memory store
-    if target in ('all', 'simulation'):
-        docs.extend(in_memory_simulation_footprints[:limit])
-    if target in ('all', 'dummy'):
-        docs.extend(in_memory_dummy_footprints[:limit])
-    docs.sort(key=lambda x: x.get('created_at', ''), reverse=True)
-    return docs[:limit]
+    return in_memory_simulation_footprints[:limit]
 
 def db_clear_footprints():
-    """Clears footprints directly from MongoDB simulation & dummy collections."""
+    """Clears footprints directly from MongoDB collection."""
     in_memory_simulation_footprints.clear()
-    in_memory_dummy_footprints.clear()
 
-    if use_mongodb:
+    if use_mongodb and mongo_simulation_db is not None:
         try:
-            if mongo_simulation_db is not None:
-                mongo_simulation_db.simulation_footprints.delete_many({})
-            if mongo_dummy_db is not None:
-                mongo_dummy_db.dummy_footprints.delete_many({})
+            mongo_simulation_db.simulation_footprints.delete_many({})
         except Exception as e:
             print(f">> [MongoDB Clear Footprints Error] {e}")
 
     return True
 
 def get_database_status():
-    """Returns database status. Exclusively reports MongoDB state."""
+    """Returns database status. Exclusively reports live MongoDB state and multi-device telemetry."""
     sim_fences = 0
     sim_footprints = 0
-    dummy_footprints = 0
+    dev_count = 0
+    loc_count = 0
+    evt_count = 0
 
     if use_mongodb and mongo_client is not None:
         try:
             if mongo_simulation_db is not None:
                 sim_fences = mongo_simulation_db.geofences.count_documents({})
                 sim_footprints = mongo_simulation_db.simulation_footprints.count_documents({})
-            if mongo_dummy_db is not None:
-                dummy_footprints = mongo_dummy_db.dummy_footprints.count_documents({})
+            tdb = mongo_client.get_database('tracking_data_db')
+            if tdb is not None:
+                dev_count = tdb.devices.count_documents({})
+                loc_count = tdb.locations.count_documents({})
+                evt_count = tdb.geofence_events.count_documents({})
         except Exception:
             sim_fences = len(in_memory_geofences)
             sim_footprints = len(in_memory_simulation_footprints)
-            dummy_footprints = len(in_memory_dummy_footprints)
     else:
         sim_fences = len(in_memory_geofences)
         sim_footprints = len(in_memory_simulation_footprints)
-        dummy_footprints = len(in_memory_dummy_footprints)
 
     return {
         'active_database': 'MongoDB Atlas & Compass',
@@ -807,193 +669,17 @@ def get_database_status():
         'mongodb_uri': MONGODB_URI,
         'compass_connection_string': MONGODB_URI,
         'mongodb_database': MONGODB_SIMULATION_DB,
-        'simulation_database': MONGODB_SIMULATION_DB,
-        'dummy_database': MONGODB_DUMMY_DB,
+        'geofences_database': MONGODB_SIMULATION_DB,
+        'tracking_database': 'tracking_data_db',
         'connection_error': mongo_connection_error,
-        'databases': {
-            'simulation_db': {
-                'name': MONGODB_SIMULATION_DB,
-                'type': 'Stored Simulation, Telemetry, Mouse & Sample Geofences',
-                'collections': ['geofences', 'simulation_footprints'],
-                'geofences_count': sim_fences,
-                'footprints_count': sim_footprints
-            },
-            'dummy_db': {
-                'name': MONGODB_DUMMY_DB,
-                'type': 'Generated Dummy Area Footprints (ENTER/INSIDE/EXIT)',
-                'collections': ['dummy_footprints'],
-                'footprints_count': dummy_footprints
-            }
-        },
         'geofences_count': sim_fences,
-        'footprints_count': sim_footprints + dummy_footprints,
-        'simulation_footprints_count': sim_footprints,
-        'dummy_footprints_count': dummy_footprints
+        'footprints_count': sim_footprints,
+        'registered_devices_count': dev_count,
+        'gps_locations_count': loc_count,
+        'geofence_events_count': evt_count,
+        'local_ip': get_local_ip(),
+        'phone_track_url': f"http://{get_local_ip()}:{PORT}/track"
     }
-
-# -----------------------------------------------------------------------------
-# DUMMY ENTRY/EXIT MOVEMENT ENGINE (STORED IN MONGODB)
-# -----------------------------------------------------------------------------
-
-def generate_dummy_movement_sequence(fence, device_id):
-    """
-    Generates a full movement sequence [ENTER, INSIDE, EXIT] for a given geofence:
-      - ENTER: Exact entry coordinate crossing into the perimeter
-      - INSIDE: Mid-point strictly inside the geofence zone
-      - EXIT: Coordinate crossing out of the geofence perimeter
-    """
-    coords = fence.get('coordinates')
-    if isinstance(coords, str):
-        try:
-            coords = json.loads(coords)
-        except Exception:
-            return []
-    if not coords:
-        return []
-
-    ftype = fence.get('type')
-    enter_pt = None
-    inside_pt = None
-    exit_pt = None
-
-    if ftype == 'circle':
-        center_lat = float(coords['lat'])
-        center_lng = float(coords['lng'])
-        radius = float(fence.get('radius') or 200.0)
-
-        theta_enter = random.random() * 2 * math.pi
-        theta_exit = (theta_enter + math.pi + (random.random() - 0.5) * 0.8) % (2 * math.pi)
-        theta_inside = (theta_enter + (random.random() * 0.8 + 0.2) * math.pi) % (2 * math.pi)
-
-        # 1. ENTER: On boundary edge
-        r_enter = radius * 0.98
-        d_lat_en = (r_enter * math.cos(theta_enter)) / 111320.0
-        d_lng_en = (r_enter * math.sin(theta_enter)) / (111320.0 * math.cos(math.radians(center_lat)))
-        enter_pt = {'lat': round(center_lat + d_lat_en, 6), 'lng': round(center_lng + d_lng_en, 6)}
-
-        # 2. INSIDE: Core interior
-        r_in = radius * (0.3 + 0.45 * random.random())
-        d_lat_in = (r_in * math.cos(theta_inside)) / 111320.0
-        d_lng_in = (r_in * math.sin(theta_inside)) / (111320.0 * math.cos(math.radians(center_lat)))
-        inside_pt = {'lat': round(center_lat + d_lat_in, 6), 'lng': round(center_lng + d_lng_in, 6)}
-
-        # 3. EXIT: Crossing clearly outside fence boundary
-        r_exit = radius * 1.08
-        d_lat_ex = (r_exit * math.cos(theta_exit)) / 111320.0
-        d_lng_ex = (r_exit * math.sin(theta_exit)) / (111320.0 * math.cos(math.radians(center_lat)))
-        exit_pt = {'lat': round(center_lat + d_lat_ex, 6), 'lng': round(center_lng + d_lng_ex, 6)}
-
-    elif ftype == 'rectangle':
-        north = float(coords['north'])
-        south = float(coords['south'])
-        east = float(coords['east'])
-        west = float(coords['west'])
-        lat_span = north - south
-        lng_span = east - west
-
-        # 1. ENTER: on west edge
-        enter_pt = {
-            'lat': round(south + lat_span * 0.45, 6),
-            'lng': round(west + lng_span * 0.01, 6)
-        }
-        # 2. INSIDE: center
-        inside_pt = {
-            'lat': round(south + lat_span * 0.50, 6),
-            'lng': round(west + lng_span * 0.50, 6)
-        }
-        # 3. EXIT: clearly outside east edge
-        exit_pt = {
-            'lat': round(south + lat_span * 0.55, 6),
-            'lng': round(east + lng_span * 0.05, 6)
-        }
-
-    elif ftype == 'polygon':
-        pts = coords
-        if isinstance(pts, list) and len(pts) >= 3:
-            # 1. ENTER on first boundary edge
-            p0, p1 = pts[0], pts[1]
-            enter_pt = {'lat': round(p0[0] + (p1[0] - p0[0]) * 0.5, 6), 'lng': round(p0[1] + (p1[1] - p0[1]) * 0.5, 6)}
-
-            # 2. INSIDE centroid
-            avg_lat = sum(p[0] for p in pts) / len(pts)
-            avg_lng = sum(p[1] for p in pts) / len(pts)
-            inside_pt = {'lat': round(avg_lat, 6), 'lng': round(avg_lng, 6)}
-
-            # 3. EXIT 25m outside opposite edge
-            mid_idx = len(pts) // 2
-            pe1, pe2 = pts[mid_idx], pts[(mid_idx + 1) % len(pts)]
-            d_lat_out = ((pe1[0] + pe2[0]) / 2) + (25.0 / 111320.0)
-            d_lng_out = ((pe1[1] + pe2[1]) / 2) + (25.0 / (111320.0 * math.cos(math.radians(pe1[0]))))
-            exit_pt = {'lat': round(d_lat_out, 6), 'lng': round(d_lng_out, 6)}
-
-    if not enter_pt or not inside_pt or not exit_pt:
-        return []
-
-    return [
-        {'point': enter_pt, 'event': 'ENTER'},
-        {'point': inside_pt, 'event': 'INSIDE'},
-        {'point': exit_pt, 'event': 'EXIT'}
-    ]
-
-def generate_dummy_footprints_in_area(count=5, specific_fence_id=None, client_fences=None):
-    """
-    Generates dummy movement sequences including ENTER, INSIDE, and EXIT events,
-    and stores all of them directly in MongoDB 'dummy_data_db.dummy_footprints'.
-    """
-    all_fences = db_list_geofences()
-
-    # If DB is empty but client provided geofences, save them to MongoDB
-    if not all_fences and client_fences and isinstance(client_fences, list):
-        for cf in client_fences:
-            try:
-                db_create_geofence(cf)
-            except Exception:
-                pass
-        all_fences = db_list_geofences()
-
-    # If still completely empty, seed sample demo geofences in MongoDB
-    if not all_fences:
-        all_fences = db_seed_sample_geofences()
-
-    active_fences = [f for f in all_fences if f.get('status') == 'active']
-    if not active_fences:
-        active_fences = all_fences
-
-    if specific_fence_id:
-        matched = [f for f in active_fences if f.get('id') == specific_fence_id]
-        if matched:
-            active_fences = matched
-
-    if not active_fences:
-        return []
-
-    device_names = ['PATROL_ALPHA', 'SCOUT_UNIT_02', 'FIELD_RANGER_7', 'DRONE_SURVEILLANCE', 'LOGISTICS_TRUCK_8']
-    generated_records = []
-
-    # Number of patrol units to simulate (at least 1, up to count)
-    num_units = max(1, min(int(count), len(device_names)))
-
-    for i in range(num_units):
-        fence = active_fences[i % len(active_fences)]
-        device_id = device_names[i % len(device_names)]
-        color = fence.get('color') or '#2563eb'
-
-        sequence = generate_dummy_movement_sequence(fence, device_id)
-        for step in sequence:
-            rec = db_record_footprint({
-                'device_id': device_id,
-                'geofence_id': fence['id'],
-                'geofence_name': fence['name'],
-                'latitude': step['point']['lat'],
-                'longitude': step['point']['lng'],
-                'event': step['event'],
-                'color': color,
-                'source': 'area_dummy_generator'
-            })
-            rec['color'] = color
-            generated_records.append(rec)
-
-    return generated_records
 
 # -----------------------------------------------------------------------------
 # ENGINE 1: FLASK WEB ENGINE
@@ -1022,11 +708,6 @@ def create_app():
         data = request.get_json(force=True)
         return jsonify(db_create_geofence(data)), 201
 
-    @app.route('/api/geofences/sample', methods=['POST'])
-    @app.route('/geofences/sample', methods=['POST'])
-    def api_seed_sample():
-        """Seeds and restores sample demo geofences directly in MongoDB."""
-        return jsonify(db_seed_sample_geofences()), 201
 
     @app.route('/api/geofences/<fid>', methods=['PUT'])
     @app.route('/geofences/<fid>', methods=['PUT'])
@@ -1057,6 +738,157 @@ def create_app():
     def api_export():
         return jsonify(db_export_geojson())
 
+    def check_admin_access(req):
+        user = get_current_user(req)
+        if user and user.get('role') != 'admin':
+            return False, "Access denied. Administrator privileges required."
+        return True, None
+
+    # --- Authentication Endpoints ---
+    @app.route('/api/auth/register', methods=['POST'])
+    def api_auth_register():
+        data = request.get_json(force=True) or {}
+        user, err = register_user(
+            name=data.get('name', ''),
+            email=data.get('email', ''),
+            password=data.get('password', ''),
+            role=data.get('role', 'user')
+        )
+        if err:
+            return jsonify({'error': err}), 400
+        login_res, _ = login_user(data.get('email'), data.get('password'))
+        if login_res:
+            safe_user, token = login_res
+            return jsonify({'user': safe_user, 'token': token}), 201
+        return jsonify({'user': user}), 201
+
+    @app.route('/api/auth/login', methods=['POST'])
+    def api_auth_login():
+        data = request.get_json(force=True) or {}
+        res, err = login_user(data.get('email', ''), data.get('password', ''))
+        if err:
+            return jsonify({'error': err}), 401
+        safe_user, token = res
+        return jsonify({'user': safe_user, 'token': token})
+
+    @app.route('/api/auth/me', methods=['GET'])
+    def api_auth_me():
+        user = get_current_user(request)
+        if not user:
+            return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'user': user})
+
+    # --- Device Management Endpoints ---
+    @app.route('/api/devices/register', methods=['POST'])
+    def api_register_device():
+        data = request.get_json(force=True) or {}
+        user = get_current_user(request)
+        user_id = (user and user.get('user_id')) or data.get('user_id') or 'anon_user'
+        device, err = register_device(
+            device_name=data.get('device_name', 'Mobile Device'),
+            user_id=user_id,
+            platform=data.get('platform', 'browser'),
+            custom_id=data.get('device_id')
+        )
+        if err:
+            return jsonify({'error': err}), 400
+        return jsonify(device), 201
+
+    @app.route('/api/devices', methods=['GET'])
+    def api_get_devices():
+        user = get_current_user(request)
+        filter_uid = None
+        if user and user.get('role') == 'user':
+            filter_uid = user.get('user_id')
+        elif request.args.get('user_id'):
+            filter_uid = request.args.get('user_id')
+        return jsonify(list_devices(user_id=filter_uid, include_revoked=False))
+
+    @app.route('/api/devices/<did>', methods=['GET'])
+    def api_get_device(did):
+        device = get_device(did)
+        if not device:
+            return jsonify({'error': 'Device not found'}), 404
+        return jsonify(device)
+
+    @app.route('/api/devices/<did>', methods=['PUT'])
+    def api_update_device(did):
+        data = request.get_json(force=True) or {}
+        updated = update_device(did, data)
+        if not updated:
+            return jsonify({'error': 'Device not found'}), 404
+        return jsonify(updated)
+
+    @app.route('/api/devices/<did>', methods=['DELETE'])
+    def api_delete_device(did):
+        allowed, err = check_admin_access(request)
+        if not allowed:
+            return jsonify({'error': err}), 403
+        delete_device(did)
+        return jsonify({'success': True})
+
+    @app.route('/api/devices/<did>/revoke', methods=['POST'])
+    def api_revoke_device(did):
+        allowed, err = check_admin_access(request)
+        if not allowed:
+            return jsonify({'error': err}), 403
+        revoked = revoke_device(did)
+        if not revoked:
+            return jsonify({'error': 'Device not found'}), 404
+        return jsonify({'success': True, 'device_id': did, 'status': 'revoked'})
+
+    @app.route('/api/devices/<did>/history', methods=['GET'])
+    def api_get_device_history(did):
+        limit = request.args.get('limit', 150)
+        from_time = request.args.get('from')
+        to_time = request.args.get('to')
+        return jsonify(get_device_history(did, limit=limit, from_time=from_time, to_time=to_time))
+
+    # --- Real Telemetry Endpoint ---
+    @app.route('/api/telemetry', methods=['POST'])
+    def api_real_telemetry():
+        data = request.get_json(force=True) or {}
+        active_fences = db_list_geofences()
+        result, err = process_telemetry(data, active_fences)
+        if err:
+            return jsonify({'error': err}), 400
+
+        # When inside fence or within 100m: record periodic footprint to simulation_footprints
+        # When outside fence (>100m): footprint_recorded is False, so NO footprint is shared to db
+        if result and result.get('footprint_recorded', True):
+            coord = result.get('coordinate') or {}
+            primary_fence = (result.get('inside_geofences') and result['inside_geofences'][0]) or {}
+            db_record_footprint({
+                'device_id': result.get('device_id'),
+                'geofence_id': primary_fence.get('id'),
+                'geofence_name': primary_fence.get('name', 'Safe Zone / Buffer'),
+                'latitude': coord.get('latitude', 0.0),
+                'longitude': coord.get('longitude', 0.0),
+                'event': 'FOOTPRINT_UPDATE',
+                'color': primary_fence.get('color', '#10b981'),
+                'source': 'real_mobile_gps'
+            })
+            if result.get('events'):
+                for ev in result['events']:
+                    db_record_footprint({
+                        'device_id': ev['device_id'],
+                        'geofence_id': ev['geofence_id'],
+                        'geofence_name': ev['geofence_name'],
+                        'latitude': ev['latitude'],
+                        'longitude': ev['longitude'],
+                        'event': ev['event_type'],
+                        'color': ev.get('color', '#2563eb'),
+                        'source': 'real_mobile_gps'
+                    })
+        return jsonify(result), 200
+
+    # --- Geofence Events History Endpoint ---
+    @app.route('/api/events', methods=['GET'])
+    def api_get_events():
+        limit = request.args.get('limit', 50)
+        did = request.args.get('device_id')
+        return jsonify(list_geofence_events(limit=int(limit), device_id=did))
+
     @app.route('/api/telemetry/evaluate', methods=['POST'])
     @app.route('/telemetry/evaluate', methods=['POST'])
     def api_telemetry():
@@ -1082,15 +914,7 @@ def create_app():
         db_clear_footprints()
         return jsonify({'success': True})
 
-    @app.route('/api/simulation/generate', methods=['POST'])
-    @app.route('/simulation/generate', methods=['POST'])
-    def api_generate_dummy():
-        data = request.get_json(force=True) or {}
-        count = data.get('count', 3)
-        fence_id = data.get('geofence_id')
-        client_fences = data.get('client_fences') or data.get('fences')
-        records = generate_dummy_footprints_in_area(count, fence_id, client_fences)
-        return jsonify(records)
+
 
     @app.route('/api/database/status', methods=['GET'])
     @app.route('/database/status', methods=['GET'])
@@ -1098,6 +922,25 @@ def create_app():
         if not use_mongodb:
             init_mongo_connection(silent=True)
         return jsonify(get_database_status())
+
+    @app.route('/api/network/info', methods=['GET'])
+    def api_network_info():
+        ip = get_local_ip()
+        return jsonify({
+            'local_ip': ip,
+            'port': PORT,
+            'track_url': f"http://{ip}:{PORT}/track",
+            'admin_url': f"http://{ip}:{PORT}/"
+        })
+
+    @app.route('/track')
+    @app.route('/user')
+    def route_track():
+        return send_from_directory('.', 'track.html')
+
+    @app.route('/admin')
+    def route_admin():
+        return send_from_directory('.', 'index.html')
 
     @app.route('/')
     def root():
@@ -1111,7 +954,7 @@ def create_app():
 
 def run_flask():
     app = create_app()
-    app.run(host='0.0.0.0', port=PORT, debug=False)
+    app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
 
 # -----------------------------------------------------------------------------
 # ENGINE 2: BUILT-IN HTTP SERVER FALLBACK
@@ -1140,6 +983,35 @@ def run_builtin():
                 self.send_json(db_list_geofences())
             elif path == '/api/database/status':
                 self.send_json(get_database_status())
+            elif path == '/api/network/info':
+                ip = get_local_ip()
+                self.send_json({
+                    'local_ip': ip,
+                    'port': PORT,
+                    'track_url': f"http://{ip}:{PORT}/track",
+                    'admin_url': f"http://{ip}:{PORT}/"
+                })
+            elif path == '/api/devices':
+                qs = urllib.parse.parse_qs(parsed.query)
+                uid = qs.get('user_id', [None])[0]
+                self.send_json(list_devices(user_id=uid))
+            elif path.startswith('/api/devices/') and path.endswith('/history'):
+                did = path.split('/')[3]
+                qs = urllib.parse.parse_qs(parsed.query)
+                lim = int(qs.get('limit', [150])[0])
+                self.send_json(get_device_history(did, limit=lim))
+            elif path.startswith('/api/devices/'):
+                did = path.split('/')[3]
+                dev = get_device(did)
+                if dev:
+                    self.send_json(dev)
+                else:
+                    self.send_json({'error': 'Not found'}, status=404)
+            elif path == '/api/events':
+                qs = urllib.parse.parse_qs(parsed.query)
+                lim = int(qs.get('limit', [50])[0])
+                did = qs.get('device_id', [None])[0]
+                self.send_json(list_geofence_events(limit=lim, device_id=did))
             elif path == '/api/footprints':
                 qs = urllib.parse.parse_qs(parsed.query)
                 limit = int(qs.get('limit', [50])[0])
@@ -1148,8 +1020,10 @@ def run_builtin():
             elif path == '/api/geofences/export':
                 self.send_json(db_export_geojson())
             else:
-                if path == '/':
+                if path in ('/', '/admin'):
                     self.path = '/index.html'
+                elif path in ('/track', '/user'):
+                    self.path = '/track.html'
                 super().do_GET()
 
         def do_POST(self):
@@ -1157,19 +1031,63 @@ def run_builtin():
             path = parsed.path
             body = self.read_json_body()
 
-            if path == '/api/geofences':
+            if path == '/api/auth/register':
+                u, err = register_user(body.get('name'), body.get('email'), body.get('password'), body.get('role', 'user'))
+                if err:
+                    self.send_json({'error': err}, status=400)
+                else:
+                    lr, _ = login_user(body.get('email'), body.get('password'))
+                    self.send_json({'user': lr[0], 'token': lr[1]} if lr else {'user': u}, status=201)
+            elif path == '/api/auth/login':
+                res, err = login_user(body.get('email'), body.get('password'))
+                if err:
+                    self.send_json({'error': err}, status=401)
+                else:
+                    self.send_json({'user': res[0], 'token': res[1]})
+            elif path == '/api/devices/register':
+                dev, err = register_device(body.get('device_name'), body.get('user_id', 'anon'), body.get('platform', 'browser'), body.get('device_id'))
+                if err:
+                    self.send_json({'error': err}, status=400)
+                else:
+                    self.send_json(dev, status=201)
+            elif path == '/api/telemetry':
+                res, err = process_telemetry(body, db_list_geofences())
+                if err:
+                    self.send_json({'error': err}, status=400)
+                else:
+                    if res and res.get('footprint_recorded', True):
+                        coord = res.get('coordinate') or {}
+                        primary_fence = (res.get('inside_geofences') and res['inside_geofences'][0]) or {}
+                        db_record_footprint({
+                            'device_id': res.get('device_id'),
+                            'geofence_id': primary_fence.get('id'),
+                            'geofence_name': primary_fence.get('name', 'Safe Zone / Buffer'),
+                            'latitude': coord.get('latitude', 0.0),
+                            'longitude': coord.get('longitude', 0.0),
+                            'event': 'FOOTPRINT_UPDATE',
+                            'color': primary_fence.get('color', '#10b981'),
+                            'source': 'real_mobile_gps'
+                        })
+                        if res.get('events'):
+                            for ev in res['events']:
+                                db_record_footprint({
+                                    'device_id': ev['device_id'],
+                                    'geofence_id': ev['geofence_id'],
+                                    'geofence_name': ev['geofence_name'],
+                                    'latitude': ev['latitude'],
+                                    'longitude': ev['longitude'],
+                                    'event': ev['event_type'],
+                                    'color': ev.get('color', '#2563eb'),
+                                    'source': 'real_mobile_gps'
+                                })
+                    self.send_json(res, status=200)
+            elif path == '/api/geofences':
                 created = db_create_geofence(body)
                 self.send_json(created, status=201)
-            elif path == '/api/geofences/sample':
-                self.send_json(db_seed_sample_geofences(), status=201)
+
             elif path == '/api/footprints':
                 created = db_record_footprint(body)
                 self.send_json(created, status=201)
-            elif path == '/api/simulation/generate':
-                count = body.get('count', 3) if isinstance(body, dict) else 3
-                fence_id = body.get('geofence_id') if isinstance(body, dict) else None
-                client_fences = (body.get('client_fences') or body.get('fences')) if isinstance(body, dict) else None
-                self.send_json(generate_dummy_footprints_in_area(count, fence_id, client_fences))
             elif path == '/api/telemetry/evaluate':
                 self.send_json(evaluate_telemetry(body))
             elif path.startswith('/api/geofences/') and path.endswith('/toggle'):
@@ -1238,13 +1156,13 @@ if __name__ == '__main__':
     print(f">> Exclusive Database Engine: MongoDB Atlas & Compass")
     if db_stat['mongodb_connected']:
         print(f">> MongoDB Compass URI: {db_stat['mongodb_uri']}")
-        print(f">> 1. Simulation DB (Live data, mouse, fences): '{db_stat.get('simulation_database')}'")
-        print(f">>    Collections: 'geofences', 'simulation_footprints'")
-        print(f">> 2. Dummy Data DB (Area ENTER/INSIDE/EXIT):   '{db_stat.get('dummy_database')}'")
-        print(f">>    Collections: 'dummy_footprints'")
+        print(f">> 1. Geofences DB: '{db_stat.get('mongodb_database')}' (geofences, simulation_footprints)")
+        print(f">> 2. Tracking DB:  '{db_stat.get('tracking_database')}' (devices, locations, geofence_events)")
     else:
         print(f">> MongoDB Connecting... Target URI: {MONGODB_URI}")
+    local_ip = get_local_ip()
     print(f">> Serving Dashboard at: http://localhost:{PORT}")
+    print(f">> Phone Tracking URL (Same Wi-Fi): http://{local_ip}:{PORT}/track")
     print("=" * 64)
 
     try:

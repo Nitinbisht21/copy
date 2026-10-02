@@ -332,15 +332,8 @@
       try {
         const res = await fetch(API_BASE, { method: 'GET' });
         if (res.ok) {
-          let remoteData = await res.json();
-          // If MongoDB has no geofences, seed sample geofences into MongoDB
-          if (!Array.isArray(remoteData) || remoteData.length === 0) {
-            const seedRes = await fetch('/api/geofences/sample', { method: 'POST' });
-            if (seedRes.ok) {
-              remoteData = await seedRes.json();
-            }
-          }
-          if (Array.isArray(remoteData) && remoteData.length > 0) {
+          const remoteData = await res.json();
+          if (Array.isArray(remoteData)) {
             this.geofences = remoteData;
             this.saveToStorage();
             this.emit('store:changed', this.geofences);
@@ -611,16 +604,13 @@
   });
 
   class MapManager {
-    constructor({ containerId, onCursorMove, onMapMove, onDraftChange, onSelectGeofence, onFlagGenerated, onMouseFenceStatusChange, onMouseTelemetry }) {
+    constructor({ containerId, onCursorMove, onMapMove, onDraftChange, onSelectGeofence, onFlagGenerated }) {
       this.containerId = containerId;
       this.onCursorMove = onCursorMove || (() => {});
       this.onMapMove = onMapMove || (() => {});
       this.onDraftChange = onDraftChange || (() => {});
       this.onSelectGeofence = onSelectGeofence || (() => {});
       this.onFlagGenerated = onFlagGenerated || (() => {});
-      this.onMouseFenceStatusChange = onMouseFenceStatusChange || (() => {});
-      this.onMouseTelemetry = onMouseTelemetry || (() => {});
-      this.lastMouseTelemetryTime = 0;
 
       this.map = null;
       this.currentMode = DrawingMode.IDLE;
@@ -634,15 +624,11 @@
       this.handlesLayerGroup = null;
       this.footprintsLayerGroup = null;
       this.flagMarkersLayerGroup = null;
-      this.simulationAssetsLayerGroup = null;
 
-      this.mouseTrackingEnabled = true;
       this.showFootprintsOnMap = true;
       this.showFlagsOnMap = true;
-      this.mouseInsideFences = new Set();
       this.flagCount = 0;
       this.activeGeofencesList = [];
-      this.assetMarkers = new Map();
 
       this.draftState = {
         type: null,
@@ -681,7 +667,6 @@
       this.savedLayerGroup = L.layerGroup().addTo(this.map);
       this.footprintsLayerGroup = L.layerGroup().addTo(this.map);
       this.flagMarkersLayerGroup = L.layerGroup().addTo(this.map);
-      this.simulationAssetsLayerGroup = L.layerGroup().addTo(this.map);
       this.draftLayerGroup = L.layerGroup().addTo(this.map);
       this.handlesLayerGroup = L.layerGroup().addTo(this.map);
 
@@ -743,50 +728,6 @@
         const { lat, lng } = e.latlng;
         this.onCursorMove({ lat, lng });
 
-        // Mouse Cross-Fence Flag Detection & Live Telemetry Stream
-        if (this.mouseTrackingEnabled && this.activeGeofencesList && this.activeGeofencesList.length > 0) {
-          const pt = { lat, lng };
-          const nowInside = new Set();
-          let insideFence = null;
-
-          for (const fence of this.activeGeofencesList) {
-            if (isPointInGeofence(pt, fence)) {
-              nowInside.add(fence.id);
-              insideFence = fence;
-
-              // Check ENTER transition
-              if (!this.mouseInsideFences.has(fence.id)) {
-                this.handleFenceTransition('ENTER', fence, pt);
-              }
-            }
-          }
-
-          // Check EXIT transition
-          for (const oldId of this.mouseInsideFences) {
-            if (!nowInside.has(oldId)) {
-              const exitedFence = this.activeGeofencesList.find(f => f.id === oldId);
-              if (exitedFence) {
-                this.handleFenceTransition('EXIT', exitedFence, pt);
-              }
-            }
-          }
-
-          // Live mouse movement stream to MongoDB (every 650ms while cursor is inside fence)
-          const nowMs = Date.now();
-          if (nowInside.size > 0 && insideFence && (nowMs - this.lastMouseTelemetryTime > 650)) {
-            this.lastMouseTelemetryTime = nowMs;
-            this.onMouseTelemetry({
-              event: 'INSIDE',
-              fence: insideFence,
-              latlng: pt,
-              timestamp: new Date()
-            });
-          }
-
-          this.mouseInsideFences = nowInside;
-          this.onMouseFenceStatusChange(insideFence ? insideFence.name : null, nowInside.size > 0);
-        }
-
         if (this.currentMode === DrawingMode.POLYGON && this.draftState.polygon.points.length > 0) {
           this.updatePolygonGuideLine(e.latlng);
         }
@@ -819,15 +760,6 @@
       setTimeout(notifyMapMove, 100);
 
       this.map.on('click', (e) => {
-        const pt = { lat: Number(e.latlng.lat.toFixed(6)), lng: Number(e.latlng.lng.toFixed(6)) };
-        // Stream mouse click coordinate event to MongoDB
-        this.onMouseTelemetry({
-          event: 'INSIDE',
-          fence: null,
-          latlng: pt,
-          isClick: true,
-          timestamp: new Date()
-        });
         this.handleMapClick(e.latlng);
       });
     }
@@ -1568,36 +1500,8 @@
       this.flagCount = 0;
     }
 
-    updateSimulatedAsset(assetId, name, latlng, color = '#3b82f6') {
-      if (!this.simulationAssetsLayerGroup) return;
-      let marker = this.assetMarkers.get(assetId);
-
-      const html = `
-        <div class="asset-marker-bubble" style="border-color: ${color};">
-          <div class="asset-pulse" style="background: ${color}; box-shadow: 0 0 6px ${color};"></div>
-          <span>${this.escapeHtml(name)}</span>
-        </div>
-      `;
-
-      const icon = L.divIcon({
-        className: 'simulated-asset-icon',
-        html: html,
-        iconSize: [95, 24],
-        iconAnchor: [47, 12]
-      });
-
-      if (!marker) {
-        marker = L.marker([latlng.lat, latlng.lng], { icon: icon, zIndexOffset: 2500 }).addTo(this.simulationAssetsLayerGroup);
-        this.assetMarkers.set(assetId, marker);
-      } else {
-        marker.setLatLng([latlng.lat, latlng.lng]);
-        marker.setIcon(icon);
-      }
-    }
-
     clearSimulatedAssets() {
-      if (this.simulationAssetsLayerGroup) this.simulationAssetsLayerGroup.clearLayers();
-      this.assetMarkers.clear();
+      // Simulation assets disabled
     }
 
     setLayerVisibility(type, visible) {
@@ -1786,32 +1690,19 @@
 
       this.btnStartAdd = document.getElementById('btn-start-add');
       this.btnExploreMode = document.getElementById('btn-explore-mode');
+      this.creatorPanel = document.getElementById('geofence-creator-panel');
+      this.btnCloseCreator = document.getElementById('btn-close-creator');
       this.modeSelectorSection = document.getElementById('mode-selector-section');
       this.formCard = document.querySelector('.form-card');
 
-      // Simulation & Mouse Flag Controls
-      this.toggleMouseTracking = document.getElementById('toggle-mouse-tracking');
-      this.btnToggleSimulation = document.getElementById('btn-toggle-simulation');
-      this.btnSimulationIcon = document.getElementById('btn-simulation-icon');
-      this.btnSimulationText = document.getElementById('btn-simulation-text');
-      this.btnGenerateFootprints = document.getElementById('btn-generate-footprints');
+      // Live Geofence Event Controls
       this.toggleShowFootprints = document.getElementById('toggle-show-footprints');
       this.toggleShowFlags = document.getElementById('toggle-show-flags');
       this.footprintsLogList = document.getElementById('footprints-log-list');
       this.footprintCountBadge = document.getElementById('footprint-count-badge');
       this.btnRefreshFootprints = document.getElementById('btn-refresh-footprints');
       this.btnClearFootprints = document.getElementById('btn-clear-footprints');
-      this.btnCreateSampleFences = document.getElementById('btn-create-sample-fences');
-      this.hudMouseFence = document.getElementById('hud-mouse-fence-val');
       this.hudFlagCount = document.getElementById('hud-flag-count-val');
-
-      this.simulationRunning = false;
-      this.simulationTimer = null;
-      this.simulatedAssets = [
-        { id: 'DRONE_ALPHA', name: 'Drone Alpha', color: '#10b981', coords: null },
-        { id: 'PATROL_101', name: 'Patrol 101', color: '#3b82f6', coords: null },
-        { id: 'SCOUT_VEHICLE', name: 'Scout 9', color: '#f59e0b', coords: null }
-      ];
 
       this.inputCircleLat = document.getElementById('circle-lat');
       this.inputCircleLng = document.getElementById('circle-lng');
@@ -1883,7 +1774,13 @@
 
       if (this.btnExploreMode) {
         this.btnExploreMode.addEventListener('click', () => {
-          this.enterExploreMode();
+          this.enterExploreMode(true);
+        });
+      }
+
+      if (this.btnCloseCreator) {
+        this.btnCloseCreator.addEventListener('click', () => {
+          this.enterExploreMode(true);
         });
       }
 
@@ -1964,18 +1861,6 @@
         });
       }
 
-      if (this.btnToggleSimulation) {
-        this.btnToggleSimulation.addEventListener('click', () => {
-          this.toggleSimulation();
-        });
-      }
-
-      if (this.btnGenerateFootprints) {
-        this.btnGenerateFootprints.addEventListener('click', () => {
-          this.generateFootprintsInsideActiveFences();
-        });
-      }
-
       if (this.btnRefreshFootprints) {
         this.btnRefreshFootprints.addEventListener('click', () => {
           this.loadRecentFootprintsFromBackend();
@@ -1985,12 +1870,6 @@
       if (this.btnClearFootprints) {
         this.btnClearFootprints.addEventListener('click', () => {
           this.clearAllFootprints();
-        });
-      }
-
-      if (this.btnCreateSampleFences) {
-        this.btnCreateSampleFences.addEventListener('click', () => {
-          this.createSampleDemoGeofences();
         });
       }
 
@@ -2200,14 +2079,20 @@
       this.isAddMode = true;
       if (this.btnStartAdd) {
         this.btnStartAdd.classList.remove('btn-secondary');
-        this.btnStartAdd.classList.add('btn-primary');
+        this.btnStartAdd.classList.add('btn-primary', 'active-mode-btn');
       }
       if (this.btnExploreMode) {
-        this.btnExploreMode.classList.remove('btn-primary');
+        this.btnExploreMode.classList.remove('btn-primary', 'active-mode-btn');
         this.btnExploreMode.classList.add('btn-secondary');
+      }
+      if (this.creatorPanel) {
+        this.creatorPanel.classList.remove('hidden');
       }
       if (this.modeSelectorSection) {
         this.modeSelectorSection.classList.remove('hidden');
+      }
+      if (this.drawingInstruction) {
+        this.drawingInstruction.classList.remove('hidden');
       }
       if (this.formCard) {
         this.formCard.classList.remove('hidden');
@@ -2224,12 +2109,25 @@
       this.mapManager.editingGeofenceId = null;
 
       if (this.btnStartAdd) {
-        this.btnStartAdd.classList.remove('btn-primary');
+        this.btnStartAdd.classList.remove('btn-primary', 'active-mode-btn');
         this.btnStartAdd.classList.add('btn-secondary');
       }
       if (this.btnExploreMode) {
         this.btnExploreMode.classList.remove('btn-secondary');
-        this.btnExploreMode.classList.add('btn-primary');
+        this.btnExploreMode.classList.add('btn-primary', 'active-mode-btn');
+      }
+
+      if (this.creatorPanel) {
+        this.creatorPanel.classList.add('hidden');
+      }
+      if (this.modeSelectorSection) {
+        this.modeSelectorSection.classList.add('hidden');
+      }
+      if (this.drawingInstruction) {
+        this.drawingInstruction.classList.add('hidden');
+      }
+      if (this.formCard) {
+        this.formCard.classList.add('hidden');
       }
 
       if (shouldClearDraft) {
@@ -2240,17 +2138,11 @@
         this.mapManager.clearDraft();
       }
 
-      if (this.drawingInstruction) {
-        this.drawingInstruction.textContent = '🧭 Explore Mode: Click any geofence to inspect details. Click "+ Add Geofence" when needed.';
-      }
       if (this.formTitle) {
         this.formTitle.textContent = 'Geofence Parameters';
       }
       if (this.btnSaveGeofence) {
         this.btnSaveGeofence.innerHTML = `<span class="icon">+</span> Save Geofence`;
-      }
-      if (this.btnCancelGeofence) {
-        this.btnCancelGeofence.classList.add('hidden');
       }
 
       this.mapManager.renderSavedGeofences(this.store.getAll(), this.store.selectedGeofenceId);
@@ -3065,80 +2957,17 @@
       if (this.hudFlagCount) {
         this.hudFlagCount.textContent = this.mapManager.flagCount;
       }
-
       const isEnter = eventData.event === 'ENTER';
       const eventTitle = isEnter ? 'ENTERED' : 'EXITED';
-      this.showToast(`🚩 Flag Generated: Mouse ${eventTitle} "${eventData.fence.name}"`, isEnter ? 'success' : 'warning');
-
-      // Record to MongoDB simulation_data_db.simulation_footprints
-      fetch('/api/footprints', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          device_id: 'MOUSE_POINTER',
-          geofence_id: eventData.fence.id,
-          geofence_name: eventData.fence.name,
-          latitude: eventData.latlng.lat,
-          longitude: eventData.latlng.lng,
-          event: eventData.event,
-          color: eventData.fence.color,
-          source: 'mouse_cross_fence'
-        })
-      })
-      .then(res => res.json())
-      .then(data => {
-        this.addFootprintToLogUI({ ...data, color: eventData.fence.color });
-      })
-      .catch(err => {
-        console.warn('Telemetry footprint error:', err);
-      });
+      this.showToast(`🚩 Flag: ${eventData.device || 'Device'} ${eventTitle} "${eventData.fence.name}"`, isEnter ? 'success' : 'warning');
     }
 
-    handleMouseTelemetry(eventData) {
-      const fence = eventData.fence;
-      const deviceId = eventData.isClick ? 'MOUSE_CLICK' : 'MOUSE_POINTER';
-      const source = eventData.isClick ? 'mouse_map_click' : 'mouse_live_telemetry';
-      const fenceId = fence ? fence.id : null;
-      const fenceName = fence ? fence.name : 'Free Navigation Zone';
-      const color = (fence && fence.color) || '#3b82f6';
-
-      // Send live mouse coordinates directly to MongoDB
-      fetch('/api/footprints', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          device_id: deviceId,
-          geofence_id: fenceId,
-          geofence_name: fenceName,
-          latitude: eventData.latlng.lat,
-          longitude: eventData.latlng.lng,
-          event: eventData.event || 'INSIDE',
-          color: color,
-          source: source
-        })
-      })
-      .then(res => res.json())
-      .then(data => {
-        this.addFootprintToLogUI({ ...data, color });
-        if (this.mapManager && this.mapManager.showFootprintsOnMap) {
-          this.mapManager.renderFootprintPoint([eventData.latlng.lat, eventData.latlng.lng], {
-            device: deviceId,
-            fenceName: fenceName,
-            color: color,
-            fenceColor: color
-          });
-        }
-      })
-      .catch(() => {});
+    handleMouseTelemetry() {
+      // Mouse telemetry streaming disabled in favor of real GPS telemetry
     }
 
-    updateMouseFenceHUD(fenceName, isInside) {
-      if (!this.hudMouseFence) return;
-      if (isInside && fenceName) {
-        this.hudMouseFence.innerHTML = `<span style="color:#10b981; font-weight:600;">🟢 Inside "${this.escapeHtml(fenceName)}"</span>`;
-      } else {
-        this.hudMouseFence.innerHTML = '<span style="color:var(--text-muted);">Outside Fences</span>';
-      }
+    updateMouseFenceHUD() {
+      // Mouse fence HUD disabled
     }
 
     addFootprintToLogUI(entry) {
@@ -3160,12 +2989,7 @@
       const timeStr = entry.created_at ? new Date(entry.created_at).toLocaleTimeString() : new Date().toLocaleTimeString();
       const ev = (entry.event || 'INSIDE').toUpperCase();
       const eventClass = ev.toLowerCase();
-      const flagEmoji = (ev === 'ENTER' || ev === 'EXIT') ? '🚩 ' : '👣 ';
-
-      const isDummy = entry.database === 'dummy_data_db' || entry.collection === 'dummy_footprints' || entry.source === 'area_dummy_generator' || String(entry.source || '').toLowerCase().includes('dummy');
-      const dbBadgeClass = isDummy ? 'db-tag-dummy' : 'db-tag-sim';
-      const dbBadgeText = isDummy ? 'DUMMY DB' : 'SIM DB';
-      const dbBadgeTitle = isDummy ? 'Stored in dummy_data_db (dummy_footprints collection)' : 'Stored in simulation_data_db (simulation_footprints collection)';
+      const flagEmoji = (ev === 'ENTER' || ev === 'EXIT') ? '🚩 ' : '📍 ';
 
       const item = document.createElement('div');
       item.className = 'footprint-log-item';
@@ -3174,10 +2998,10 @@
         <div class="log-meta">
           <span class="log-time">${timeStr}</span>
           <span class="log-badge ${eventClass}">${flagEmoji}${ev}</span>
-          <span class="log-db-pill ${dbBadgeClass}" title="${dbBadgeTitle}">${dbBadgeText}</span>
+          <span class="log-db-pill db-tag-sim" title="Real GPS Telemetry stored in MongoDB">REAL GPS</span>
           <span class="log-target">
             <span class="log-color-pip" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${allottedColor};box-shadow:0 0 4px ${allottedColor};margin-right:4px;"></span>
-            ${this.escapeHtml(entry.device_id || 'TARGET')}
+            ${this.escapeHtml(entry.device_id || 'GPS DEVICE')}
           </span>
         </div>
         <div class="log-fence" title="${this.escapeHtml(entry.geofence_name || 'N/A')}">
@@ -3187,7 +3011,7 @@
 
       this.footprintsLogList.prepend(item);
 
-      while (this.footprintsLogList.children.length > 40) {
+      while (this.footprintsLogList.children.length > 50) {
         this.footprintsLogList.removeChild(this.footprintsLogList.lastChild);
       }
 
@@ -3198,7 +3022,7 @@
     }
 
     loadRecentFootprintsFromBackend() {
-      fetch('/api/footprints?target=simulation&limit=40')
+      fetch('/api/footprints?limit=40')
         .then(res => res.json())
         .then(rows => {
           if (Array.isArray(rows)) {
@@ -3207,7 +3031,7 @@
             }
             if (rows.length === 0) {
               if (this.footprintsLogList) {
-                this.footprintsLogList.innerHTML = '<div class="empty-hint" style="font-size: 0.74rem;">No footprints or flag events yet. Move mouse over fences or click Drop in Area.</div>';
+                this.footprintsLogList.innerHTML = '<div class="empty-hint" style="font-size: 0.74rem;">No boundary transition events recorded yet. When real devices enter or exit active fences, live alerts appear here.</div>';
               }
               return;
             }
@@ -3236,374 +3060,15 @@
           }
         })
         .catch(err => {
-          console.warn('Could not load footprints from MongoDB:', err);
+          console.warn('Could not load events from MongoDB:', err);
         });
-    }
-
-    generateFootprintsInsideActiveFences() {
-      let activeFences = this.store.getActiveGeofences();
-      if (!activeFences || activeFences.length === 0) {
-        activeFences = this.store.getAll();
-      }
-
-      // Fetch generated ENTER, INSIDE, and EXIT events directly from MongoDB
-      fetch('/api/simulation/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count: 3, client_fences: activeFences })
-      })
-      .then(res => res.json())
-      .then(points => {
-        if (Array.isArray(points) && points.length > 0) {
-          let enterCount = 0;
-          let insideCount = 0;
-          let exitCount = 0;
-
-          points.forEach(fp => {
-            const fence = this.store.getById(fp.geofence_id) || (activeFences && activeFences.find(f => f.name === fp.geofence_name || f.id === fp.geofence_id));
-            const allottedColor = (fence && fence.color) || fp.color || '#2563eb';
-            const ev = (fp.event || 'INSIDE').toUpperCase();
-
-            if (ev === 'ENTER') {
-              enterCount++;
-              if (this.mapManager) {
-                this.mapManager.flagCount++;
-                if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
-                if (this.mapManager.showFlagsOnMap) {
-                  this.mapManager.generateFlagMarker('ENTER', fence || { name: fp.geofence_name, color: allottedColor }, { lat: fp.latitude, lng: fp.longitude }, fp.device_id || 'Dummy Asset');
-                }
-                this.showToast(`🚩 Flag Generated: ${fp.device_id || 'Dummy Asset'} ENTERED "${(fence && fence.name) || fp.geofence_name}"`, 'success');
-              }
-            } else if (ev === 'EXIT') {
-              exitCount++;
-              if (this.mapManager) {
-                this.mapManager.flagCount++;
-                if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
-                if (this.mapManager.showFlagsOnMap) {
-                  this.mapManager.generateFlagMarker('EXIT', fence || { name: fp.geofence_name, color: allottedColor }, { lat: fp.latitude, lng: fp.longitude }, fp.device_id || 'Dummy Asset');
-                }
-                this.showToast(`🚩 Flag Generated: ${fp.device_id || 'Dummy Asset'} EXITED "${(fence && fence.name) || fp.geofence_name}"`, 'warning');
-              }
-            } else {
-              insideCount++;
-              if (this.mapManager && this.mapManager.showFootprintsOnMap) {
-                this.mapManager.renderFootprintPoint([fp.latitude, fp.longitude], {
-                  device: fp.device_id,
-                  fenceName: fp.geofence_name,
-                  color: allottedColor,
-                  fenceColor: allottedColor
-                });
-              }
-            }
-
-            this.addFootprintToLogUI({ ...fp, color: allottedColor });
-          });
-
-          this.showToast(`👣 Stored ${points.length} events in MongoDB (${enterCount} ENTER, ${insideCount} INSIDE, ${exitCount} EXIT)!`, 'success');
-        }
-      })
-      .catch(err => {
-        console.warn('Backend dummy generator error:', err);
-      });
-    }
-
-    async createSampleDemoGeofences() {
-      try {
-        const res = await fetch('/api/geofences/sample', { method: 'POST' });
-        if (res.ok) {
-          const fences = await res.json();
-          if (Array.isArray(fences) && fences.length > 0) {
-            this.store.geofences = fences;
-            this.store.saveToStorage();
-            this.store.emit('store:changed', this.store.geofences);
-            this.mapManager.renderSavedGeofences(this.store.geofences, fences[0] ? fences[0].id : null);
-            this.renderSavedList();
-            this.showToast('🎯 Fetched & seeded sample geofences in MongoDB!', 'success');
-            return fences;
-          }
-        }
-      } catch (err) {
-        console.warn('Sample geofence fetch error:', err);
-      }
-      return [];
-    }
-
-    toggleSimulation() {
-      if (this.simulationRunning) {
-        this.simulationRunning = false;
-        if (this.simulationTimer) clearInterval(this.simulationTimer);
-        this.simulationTimer = null;
-        if (this.btnSimulationIcon) this.btnSimulationIcon.textContent = '▶';
-        if (this.btnSimulationText) this.btnSimulationText.textContent = 'Start Simulation';
-        this.showToast('⏸ Asset Simulation Paused.', 'info');
-      } else {
-        let activeFences = this.store.getActiveGeofences();
-        if (!activeFences || activeFences.length === 0) {
-          const all = this.store.getAll();
-          if (all.length > 0) {
-            activeFences = all;
-          } else {
-            activeFences = this.createSampleDemoGeofences();
-          }
-        }
-
-        // Clear previous simulation state so all assets stage cleanly outside the active fence
-        this.simulatedAssets.forEach(a => {
-          a.coords = null;
-          a.insideFences = new Set();
-          a.outsideSteps = 0;
-          a.targetFenceId = null;
-        });
-
-        this.simulationRunning = true;
-        if (this.btnSimulationIcon) this.btnSimulationIcon.textContent = '⏸';
-        if (this.btnSimulationText) this.btnSimulationText.textContent = 'Pause Simulation';
-        this.showToast('▶ Live Simulation Started: Assets entering and patrolling fence area.', 'success');
-
-        this.startSimulationLoop();
-      }
-    }
-
-    startSimulationLoop() {
-      if (this.simulationTimer) clearInterval(this.simulationTimer);
-
-      const getGeofenceCenterAndRadius = (fence) => {
-        let coords = fence.coordinates;
-        if (typeof coords === 'string') {
-          try { coords = JSON.parse(coords); } catch (e) {}
-        }
-        if (!coords) return { center: { lat: 30.123456, lng: 78.123456 }, radius: 200 };
-
-        if (fence.type === GeofenceType.CIRCLE) {
-          return {
-            center: { lat: Number(coords.lat), lng: Number(coords.lng) },
-            radius: Number(fence.radius) || 200
-          };
-        } else if (fence.type === GeofenceType.RECTANGLE) {
-          const n = Number(coords.north);
-          const s = Number(coords.south);
-          const e = Number(coords.east);
-          const w = Number(coords.west);
-          const centerLat = (n + s) / 2;
-          const centerLng = (e + w) / 2;
-          const latSpanM = Math.abs(n - s) * 111320;
-          const lngSpanM = Math.abs(e - w) * 111320 * Math.cos((centerLat * Math.PI) / 180.0);
-          const radius = Math.max(120, Math.sqrt(latSpanM * latSpanM + lngSpanM * lngSpanM) / 2);
-          return { center: { lat: centerLat, lng: centerLng }, radius };
-        } else if (fence.type === GeofenceType.POLYGON) {
-          const pts = coords;
-          if (Array.isArray(pts) && pts.length >= 3) {
-            const avgLat = pts.reduce((acc, p) => acc + p[0], 0) / pts.length;
-            const avgLng = pts.reduce((acc, p) => acc + p[1], 0) / pts.length;
-            const maxDist = Math.max(...pts.map(p => haversineDistance(avgLat, avgLng, p[0], p[1])));
-            return { center: { lat: avgLat, lng: avgLng }, radius: Math.max(80, maxDist) };
-          }
-        }
-        return { center: { lat: 30.123456, lng: 78.123456 }, radius: 200 };
-      };
-
-      const stepSimulation = () => {
-        if (!this.simulationRunning) return;
-        const activeFences = this.store.getActiveGeofences();
-        if (!activeFences || activeFences.length === 0) return;
-
-        // Target the active fence currently selected, or newest active fence
-        const selected = this.store.getSelected();
-        const primaryFence = (selected && selected.status === 'active') ? selected : activeFences[activeFences.length - 1];
-        if (!primaryFence) return;
-        const fenceMeta = getGeofenceCenterAndRadius(primaryFence);
-
-        this.simulatedAssets.forEach((asset, idx) => {
-          if (!asset.insideFences) asset.insideFences = new Set();
-
-          // 1. Initial staged placement strictly outside perimeter
-          if (!asset.coords || asset.targetFenceId !== primaryFence.id) {
-            asset.targetFenceId = primaryFence.id;
-            asset.outsideSteps = 0;
-
-            const latRad0 = (fenceMeta.center.lat * Math.PI) / 180.0;
-            // 3 distinct approach angles separated by ~120 degrees:
-            // Drone Alpha (idx 0): North (-PI/2)
-            // Patrol 101  (idx 1): South-East (PI/6)
-            // Scout 9     (idx 2): West (PI)
-            const entryAngles = [-Math.PI / 2, Math.PI / 6, Math.PI];
-            const initAngle = entryAngles[idx % entryAngles.length];
-
-            // Staged strictly outside the boundary (radius + 10m to 14m)
-            const startDist = fenceMeta.radius + 10 + (idx * 2);
-            const dLat0 = (startDist * Math.cos(initAngle)) / 111320.0;
-            const dLng0 = (startDist * Math.sin(initAngle)) / (111320.0 * Math.cos(latRad0));
-
-            asset.coords = {
-              lat: Number((fenceMeta.center.lat + dLat0).toFixed(6)),
-              lng: Number((fenceMeta.center.lng + dLng0).toFixed(6))
-            };
-            asset.speed = 18 + (idx * 3); // 18m, 21m, 24m per step
-
-            // Aim heading straight at fence center so next step crosses into the perimeter
-            asset.heading = Math.atan2(
-              (fenceMeta.center.lng - asset.coords.lng) * Math.cos(latRad0),
-              (fenceMeta.center.lat - asset.coords.lat)
-            );
-
-            // Crucial: Clear insideFences so perimeter entry triggers ENTER flag
-            asset.insideFences = new Set();
-          }
-
-          // 2. Realistic forward step along current heading
-          const latRad = (asset.coords.lat * Math.PI) / 180.0;
-          const stepMeters = asset.speed || 20;
-          const dLat = (stepMeters * Math.cos(asset.heading)) / 111320.0;
-          const dLng = (stepMeters * Math.sin(asset.heading)) / (111320.0 * Math.cos(latRad));
-
-          const nextCoords = {
-            lat: Number((asset.coords.lat + dLat).toFixed(6)),
-            lng: Number((asset.coords.lng + dLng).toFixed(6))
-          };
-
-          // 3. Dynamic Boundary Evaluation
-          const nowInside = new Set();
-          let insideFenceObj = null;
-          for (const fence of activeFences) {
-            if (isPointInGeofence(nextCoords, fence)) {
-              nowInside.add(fence.id);
-              insideFenceObj = fence;
-            }
-          }
-
-          let ev = 'INSIDE';
-          let transitionFence = null;
-
-          // Check ENTER transition (Was outside -> Now inside)
-          for (const fid of nowInside) {
-            if (!asset.insideFences.has(fid)) {
-              transitionFence = activeFences.find(f => f.id === fid);
-              ev = 'ENTER';
-              break;
-            }
-          }
-
-          // Check EXIT transition (Was inside -> Now outside)
-          if (!transitionFence) {
-            for (const oldId of asset.insideFences) {
-              if (!nowInside.has(oldId)) {
-                transitionFence = activeFences.find(f => f.id === oldId);
-                ev = 'EXIT';
-                break;
-              }
-            }
-          }
-
-          if (!transitionFence) {
-            if (nowInside.size > 0) {
-              ev = 'INSIDE';
-              transitionFence = insideFenceObj;
-            } else {
-              ev = 'OUTSIDE';
-              transitionFence = primaryFence;
-            }
-          }
-
-          // 4. Steer realistic heading for next step
-          if (nowInside.size > 0) {
-            asset.outsideSteps = 0;
-            // Gentle wandering drift while cruising across fence interior
-            asset.heading += (Math.random() - 0.5) * 0.12;
-          } else {
-            asset.outsideSteps = (asset.outsideSteps || 0) + 1;
-            // After crossing outside (~25-40m outside fence), steer back toward fence center!
-            if (asset.outsideSteps >= 2) {
-              const targetAngle = Math.atan2(
-                (fenceMeta.center.lng - nextCoords.lng) * Math.cos(latRad),
-                (fenceMeta.center.lat - nextCoords.lat)
-              );
-              asset.heading = targetAngle + (Math.random() - 0.5) * 0.15;
-              asset.outsideSteps = 0;
-            }
-          }
-
-          // Update asset coordinate & fence state
-          asset.coords = nextCoords;
-          asset.insideFences = nowInside;
-
-          const allottedColor = (transitionFence && transitionFence.color) || asset.color || '#2563eb';
-          const fenceName = (transitionFence && transitionFence.name) || 'Geofence';
-
-          // Update simulated asset marker on map smoothly
-          this.mapManager.updateSimulatedAsset(asset.id, asset.name, asset.coords, asset.color);
-
-          if (ev === 'ENTER') {
-            // DYNAMIC ENTER: Always update counter & toast message, only draw flag if flag option is ON
-            if (this.mapManager) {
-              this.mapManager.flagCount++;
-              if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
-              if (this.mapManager.showFlagsOnMap) {
-                this.mapManager.generateFlagMarker('ENTER', transitionFence, asset.coords, asset.name);
-              }
-              this.showToast(`🚩 Flag Generated: ${asset.name} ENTERED "${fenceName}"`, 'success');
-            }
-          } else if (ev === 'EXIT') {
-            // DYNAMIC EXIT: Always update counter & toast message, only draw flag if flag option is ON
-            if (this.mapManager) {
-              this.mapManager.flagCount++;
-              if (this.hudFlagCount) this.hudFlagCount.textContent = this.mapManager.flagCount;
-              if (this.mapManager.showFlagsOnMap) {
-                this.mapManager.generateFlagMarker('EXIT', transitionFence, asset.coords, asset.name);
-              }
-              this.showToast(`🚩 Flag Generated: ${asset.name} EXITED "${fenceName}"`, 'warning');
-            }
-          } else if (ev === 'INSIDE') {
-            // Breadcrumb trail dot inside
-            if (this.mapManager && this.mapManager.showFootprintsOnMap) {
-              this.mapManager.renderFootprintPoint(asset.coords, {
-                device: asset.name,
-                fenceName: fenceName,
-                color: allottedColor,
-                fenceColor: allottedColor
-              });
-            }
-          }
-
-          // Post telemetry event to MongoDB simulation_data_db
-          if (ev !== 'OUTSIDE') {
-            fetch('/api/footprints', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                device_id: asset.name,
-                geofence_id: transitionFence ? transitionFence.id : null,
-                geofence_name: fenceName,
-                latitude: asset.coords.lat,
-                longitude: asset.coords.lng,
-                event: ev,
-                color: allottedColor,
-                source: 'simulation_loop'
-              })
-            })
-            .then(res => res.json())
-            .then(data => this.addFootprintToLogUI({ ...data, color: allottedColor }))
-            .catch(() => {});
-          }
-        });
-      };
-
-      stepSimulation();
-      // 3-second simulation refresh rate
-      this.simulationTimer = setInterval(stepSimulation, 3000);
     }
 
     clearAllFootprints() {
       this.mapManager.clearFootprintsOnMap();
       this.mapManager.clearFlagMarkersOnMap();
-      this.mapManager.clearSimulatedAssets();
-      this.simulatedAssets.forEach(a => {
-        a.coords = null;
-        a.insideFences = new Set();
-        a.outsideSteps = 0;
-        a.targetFenceId = null;
-      });
       if (this.footprintsLogList) {
-        this.footprintsLogList.innerHTML = '<div class="empty-hint" style="font-size: 0.74rem;">Logs and footprints cleared.</div>';
+        this.footprintsLogList.innerHTML = '<div class="empty-hint" style="font-size: 0.74rem;">Event logs cleared.</div>';
       }
       if (this.footprintCountBadge) this.footprintCountBadge.textContent = '0';
       if (this.hudFlagCount) this.hudFlagCount.textContent = '0';
@@ -3611,7 +3076,7 @@
 
       fetch('/api/footprints', { method: 'DELETE' })
         .then(() => {
-          this.showToast('Footprints, Flag Markers, and DB logs cleared.', 'info');
+          this.showToast('Event history cleared from database.', 'info');
         })
         .catch(err => console.warn('Clear footprints error:', err));
     }
@@ -3622,23 +3087,21 @@
         .then(data => {
           if (!this.dbStatusBadge || !this.dbStatusText) return;
           this.compassUri = data.compass_connection_string || data.mongodb_uri || 'mongodb://localhost:27017';
-          const simName = data.simulation_database || 'simulation_data_db';
-          const dummyName = data.dummy_database || 'dummy_data_db';
+          const simName = data.mongodb_database || 'simulation_data_db';
+          const trackingName = data.tracking_database || 'tracking_data_db';
           if (data.mongodb_connected) {
             this.dbStatusBadge.classList.add('mongo-active');
             this.dbStatusBadge.classList.remove('sqlite-active');
-            this.dbStatusText.textContent = 'MongoDB Atlas (2 DBs)';
-            this.dbStatusBadge.title = `MongoDB Compass Connected!\n` +
-              `1. Simulation DB (Live data): ${simName} (collections: geofences, simulation_footprints)\n` +
-              `2. Dummy DB (Generated): ${dummyName} (collection: dummy_footprints)\n` +
+            this.dbStatusText.textContent = 'MongoDB Atlas (Connected)';
+            this.dbStatusBadge.title = `MongoDB Atlas Connected!\n` +
+              `1. Geofences DB: ${simName}\n` +
+              `2. Tracking DB: ${trackingName}\n` +
               `URI: ${data.mongodb_uri}\nClick to copy Compass URI`;
           } else {
             this.dbStatusBadge.classList.remove('mongo-active');
             this.dbStatusBadge.classList.add('sqlite-active');
             this.dbStatusText.textContent = 'MongoDB (Connecting...)';
             this.dbStatusBadge.title = `Connecting to MongoDB Atlas / Compass...\n` +
-              `1. Simulation DB: ${simName}\n` +
-              `2. Dummy DB: ${dummyName}\n` +
               `Target URI: ${this.compassUri}\nClick to copy Compass URI`;
           }
         })
@@ -3683,12 +3146,6 @@
         },
         onFlagGenerated: (eventData) => {
           if (uiController) uiController.handleFlagGenerated(eventData);
-        },
-        onMouseTelemetry: (eventData) => {
-          if (uiController) uiController.handleMouseTelemetry(eventData);
-        },
-        onMouseFenceStatusChange: (fenceName, isInside) => {
-          if (uiController) uiController.updateMouseFenceHUD(fenceName, isInside);
         }
       });
 
@@ -3697,6 +3154,9 @@
         mapManager
       });
 
+      window.mapManager = mapManager;
+      window.uiController = uiController;
+      window.geofenceStore = store;
       window.geofenceApp = { store, mapManager, uiController };
       console.log('Geofence Map Builder initialized successfully.');
     } catch (err) {

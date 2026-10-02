@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Mobile GPS Tracker | Virtual Fence Client</title>
+  <meta name="description" content="Lightweight real-time browser GPS tracking companion for Virtual Fence. Transmits live location securely to the geofence monitoring engine.">
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --bg-dark: #0a0e17;
+      --card-bg: rgba(18, 26, 43, 0.85);
+      --card-border: rgba(43, 62, 99, 0.5);
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --accent: #3b82f6;
+      --accent-glow: rgba(59, 130, 246, 0.35);
+      --success: #10b981;
+      --success-glow: rgba(16, 185, 129, 0.3);
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --danger-glow: rgba(239, 68, 68, 0.3);
+      --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      background-image: 
+        radial-gradient(circle at 50% 0%, rgba(37, 99, 235, 0.15) 0%, transparent 60%),
+        radial-gradient(circle at 100% 100%, rgba(16, 185, 129, 0.08) 0%, transparent 50%);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 1.25rem 1rem 2rem 1rem;
+    }
+
+    .tracker-container {
+      width: 100%;
+      max-width: 440px;
+      display: flex;
+      flex-direction: column;
+      gap: 1.2rem;
+    }
+
+    /* Top Brand Header */
+    .brand-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem 0.25rem;
+    }
+
+    .brand-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .brand-logo-dot {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #2563eb, #10b981);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
+    }
+
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .brand-sub {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .user-pill {
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+
+    /* Main Live Card */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      padding: 1.4rem;
+      backdrop-filter: blur(14px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+      display: flex;
+      flex-direction: column;
+      gap: 1.2rem;
+    }
+
+    /* Status Indicator */
+    .status-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1rem;
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid var(--card-border);
+    }
+
+    .status-left {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+
+    .pulse-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--danger);
+      box-shadow: 0 0 10px var(--danger-glow);
+      transition: all 0.3s ease;
+    }
+
+    .pulse-dot.active {
+      background: var(--success);
+      box-shadow: 0 0 12px var(--success-glow);
+      animation: pulse 1.6s infinite;
+    }
+
+    .pulse-dot.seeking {
+      background: var(--warning);
+      box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+      animation: pulse 1s infinite;
+    }
+
+    .pulse-dot.offline {
+      background: var(--danger);
+      box-shadow: 0 0 12px rgba(239, 68, 68, 0.5);
+      animation: none;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.15); opacity: 1; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+
+    .status-text {
+      font-size: 0.92rem;
+      font-weight: 600;
+    }
+
+    .device-tag {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--accent);
+      background: rgba(59, 130, 246, 0.12);
+      padding: 3px 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(59, 130, 246, 0.25);
+    }
+
+    /* Primary Action Button */
+    .btn-track {
+      width: 100%;
+      padding: 1rem;
+      font-family: var(--font-sans);
+      font-size: 1.05rem;
+      font-weight: 700;
+      border-radius: 14px;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.6rem;
+      transition: all 0.25s ease;
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: #fff;
+      box-shadow: 0 6px 20px rgba(16, 185, 129, 0.35);
+    }
+
+    .btn-track:active {
+      transform: scale(0.98);
+    }
+
+    .btn-track.active {
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      box-shadow: 0 6px 20px rgba(239, 68, 68, 0.35);
+    }
+
+    .btn-track.loading {
+      opacity: 0.75;
+      pointer-events: none;
+    }
+
+    /* Coordinate & Telemetry Grid */
+    .telemetry-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    .stat-tile {
+      background: rgba(15, 23, 42, 0.55);
+      border: 1px solid rgba(51, 65, 85, 0.4);
+      border-radius: 12px;
+      padding: 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+
+    .stat-tile.full-width {
+      grid-column: span 2;
+    }
+
+    .stat-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .stat-val {
+      font-family: var(--font-mono);
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #fff;
+      word-break: break-all;
+    }
+
+    .stat-val.fence-val {
+      font-family: var(--font-sans);
+      font-size: 0.95rem;
+      color: #38bdf8;
+    }
+
+    .stat-val.acc-good { color: #10b981; }
+    .stat-val.acc-med { color: #f59e0b; }
+    .stat-val.acc-poor { color: #ef4444; }
+
+    /* Wake Lock & Permission Notice */
+    .notice-card {
+      background: rgba(30, 41, 59, 0.4);
+      border: 1px dashed rgba(71, 85, 105, 0.5);
+      border-radius: 12px;
+      padding: 0.85rem 1rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.65rem;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      line-height: 1.45;
+    }
+
+    .notice-icon {
+      font-size: 1rem;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    /* Modal / Form Overlays */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      z-index: 1000;
+      opacity: 1;
+      transition: opacity 0.2s ease;
+    }
+
+    .modal-overlay.hidden {
+      display: none;
+      opacity: 0;
+    }
+
+    .modal-card {
+      background: #111827;
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      padding: 1.5rem;
+      width: 100%;
+      max-width: 380px;
+      display: flex;
+      flex-direction: column;
+      gap: 1.1rem;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+    }
+
+    .modal-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .form-label {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .form-input {
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid rgba(51, 65, 85, 0.7);
+      border-radius: 10px;
+      padding: 0.7rem 0.9rem;
+      color: #fff;
+      font-family: inherit;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .form-input:focus {
+      border-color: var(--accent);
+    }
+
+    .btn-submit {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 0.25rem;
+      transition: all 0.2s;
+    }
+
+    .btn-submit:active { transform: scale(0.98); }
+
+    .btn-text-action {
+      background: transparent;
+      border: none;
+      color: var(--accent);
+      font-size: 0.8rem;
+      cursor: pointer;
+      text-decoration: underline;
+      align-self: center;
+    }
+
+    /* Offline Toast & Alerts */
+    .offline-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.72rem;
+      padding: 2px 7px;
+      border-radius: 10px;
+      background: rgba(239, 68, 68, 0.2);
+      color: #fca5a5;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+  </style>
+</head>
+<body>
+  <div class="tracker-container">
+    <!-- Top Header -->
+    <header class="brand-header">
+      <div class="brand-title-wrap">
+        <div class="brand-logo-dot">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"></path>
+            <circle cx="12" cy="10" r="3"></circle>
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-title">GPS TRACKER</h1>
+          <div class="brand-sub">Virtual Fence Field Client</div>
+        </div>
+      </div>
+
+      <button type="button" id="btn-user-profile" class="user-pill" title="Device & Profile Settings">
+        <span id="user-display-name">Connecting...</span>
+      </button>
+    </header>
+
+    <!-- Main Card -->
+    <main class="card">
+      <!-- Status Banner -->
+      <div class="status-banner">
+        <div class="status-left">
+          <div id="status-pulse" class="pulse-dot"></div>
+          <div>
+            <div id="status-label" class="status-text">Tracking Stopped</div>
+            <div id="network-status" style="font-size: 0.72rem; color: var(--text-muted);">Ready to connect</div>
+          </div>
+        </div>
+        <div id="device-badge" class="device-tag">NO DEVICE</div>
+      </div>
+
+      <!-- Start/Stop Primary Button -->
+      <button type="button" id="btn-toggle-track" class="btn-track">
+        <svg id="btn-track-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="5 3 19 12 5 21 5 3"></polygon>
+        </svg>
+        <span id="btn-track-text">Start GPS Tracking</span>
+      </button>
+
+      <!-- Real-time Telemetry Grid -->
+      <section class="telemetry-grid" aria-label="Real-time Telemetry">
+        <!-- Latitude -->
+        <div class="stat-tile">
+          <span class="stat-label">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+            </svg>
+            Latitude
+          </span>
+          <span id="stat-lat" class="stat-val">—</span>
+        </div>
+
+        <!-- Longitude -->
+        <div class="stat-tile">
+          <span class="stat-label">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="2" x2="12" y2="22"></line>
+            </svg>
+            Longitude
+          </span>
+          <span id="stat-lng" class="stat-val">—</span>
+        </div>
+
+        <!-- GPS Accuracy -->
+        <div class="stat-tile">
+          <span class="stat-label">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="8"></circle>
+              <circle cx="12" cy="12" r="2"></circle>
+            </svg>
+            GPS Accuracy
+          </span>
+          <span id="stat-accuracy" class="stat-val">—</span>
+        </div>
+
+        <!-- Speed & Heading -->
+        <div class="stat-tile">
+          <span class="stat-label">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="12 2 19 21 12 17 5 21 12 2"></polygon>
+            </svg>
+            Speed / Heading
+          </span>
+          <span id="stat-speed" class="stat-val">0.0 km/h</span>
+        </div>
+
+        <!-- Current Geofence Zone -->
+        <div class="stat-tile full-width">
+          <span class="stat-label">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            </svg>
+            Current Active Geofence
+          </span>
+          <span id="stat-geofence" class="stat-val fence-val">Outside Geofences</span>
+        </div>
+
+        <!-- Last Updated & 2-Min Database Cadence -->
+        <div class="stat-tile full-width" style="padding: 0.65rem 0.85rem; flex-direction: row; justify-content: space-between; align-items: center;">
+          <div>
+            <span class="stat-label" style="margin-bottom:0.15rem;">DB Footprint (Every 2 min)</span>
+            <div id="stat-sync-countdown" style="font-size: 0.75rem; color: #38bdf8; font-weight: 500;">Next upload: Standby</div>
+          </div>
+          <div style="text-align: right;">
+            <div class="stat-label" style="margin-bottom:0.15rem;">Last Upload</div>
+            <span id="stat-last-sync" style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted);">Never</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Battery & Background Tracking Advice -->
+      <div class="notice-card">
+        <span class="notice-icon">💡</span>
+        <div>
+          <strong>Screen Wake Lock Active:</strong> Keep this browser tab open to ensure continuous GPS telemetry while walking or driving.
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Device Registration / Switch Modal -->
+  <div id="device-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2 class="modal-title">Device Connection</h2>
+      <p style="font-size: 0.82rem; color: var(--text-muted);">
+        Enter a name for this phone or select your existing device ID.
+      </p>
+
+      <form id="device-form" class="form-group" style="gap: 0.9rem;">
+        <div class="form-group">
+          <label class="form-label" for="input-device-name">Device Display Name</label>
+          <input type="text" id="input-device-name" class="form-input" placeholder="e.g. Nitin's Pixel 8" required>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="input-device-id">Custom Device ID (Optional)</label>
+          <input type="text" id="input-device-id" class="form-input" placeholder="e.g. DEV_001" style="font-family: var(--font-mono);">
+        </div>
+
+        <button type="submit" class="btn-submit">Connect Device</button>
+        <button type="button" id="btn-close-device-modal" class="btn-text-action">Close</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Client Tracking Engine Script -->
+  <script src="js/user-tracker.js"></script>
+</body>
+</html>

@@ -84,6 +84,14 @@
           </svg>
           <span>Locate Me</span>
         </button>
+
+        <button id="btn-connect-phone-modal" class="btn-header" style="background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.4); color: #10b981;" title="Connect a smartphone to stream real GPS">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+            <line x1="12" y1="18" x2="12.01" y2="18"></line>
+          </svg>
+          <span>Connect Phone</span>
+        </button>
       </div>
     </header>
 
@@ -93,201 +101,212 @@
       <aside class="app-sidebar">
         <div class="sidebar-scroll-content">
           <!-- Add When Needed Workflow Control -->
-          <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
-            <button type="button" id="btn-start-add" class="btn-primary" style="flex: 1; padding: 8px 12px; font-size: 0.82rem;">
+          <div style="display: flex; gap: 0.5rem; margin-bottom: 0.65rem;">
+            <button type="button" id="btn-start-add" class="btn-secondary" style="flex: 1; padding: 9px 12px; font-size: 0.82rem; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 0.35rem;">
               <span>+</span> Add Geofence
             </button>
-            <button type="button" id="btn-explore-mode" class="btn-secondary" style="flex: 1; padding: 8px 12px; font-size: 0.82rem;" title="Explore and select geofences without drawing">
-              Explore Mode
+            <button type="button" id="btn-explore-mode" class="btn-primary active-mode-btn" style="flex: 1; padding: 9px 12px; font-size: 0.82rem; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 0.35rem;" title="Explore and select geofences without drawing">
+              <span>🧭</span> Explore Mode
             </button>
           </div>
 
-          <!-- Mode Switcher -->
-          <section id="mode-selector-section">
-            <div class="sidebar-section-title">
-              <span>Geofence Shape Mode</span>
+          <!-- Geofence Creation / Drawing Panel (Hidden in Explore Mode, Shown on "+ Add Geofence") -->
+          <div id="geofence-creator-panel" class="geofence-creator-panel hidden">
+            <div class="creator-panel-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; padding: 0.2rem 0.25rem;">
+              <span style="font-weight: 700; font-size: 0.78rem; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.35rem;">
+                <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#38bdf8; box-shadow:0 0 6px #38bdf8;"></span>
+                Geofence Designer
+              </span>
+              <button type="button" id="btn-close-creator" style="background: rgba(255, 255, 255, 0.07); border: 1px solid var(--border-subtle); color: var(--text-muted); cursor: pointer; border-radius: 4px; padding: 2px 8px; font-size: 0.75rem;" title="Close and return to Explore Mode">✕ Close</button>
             </div>
-            <div class="mode-selector-grid" role="tablist">
-              <button type="button" class="mode-btn active" data-mode="circle" role="tab" id="tab-circle" title="Circular Geofence">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="9"></circle>
-                </svg>
-                <span>Circle</span>
-              </button>
 
-              <button type="button" class="mode-btn" data-mode="rectangle" role="tab" id="tab-rectangle" title="Fixed Rectangle Geofence">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="3" y="5" width="18" height="14" rx="2"></rect>
-                </svg>
-                <span>Rectangle</span>
-              </button>
+            <!-- Mode Switcher -->
+            <section id="mode-selector-section">
+              <div class="sidebar-section-title">
+                <span>Geofence Shape Mode</span>
+              </div>
+              <div class="mode-selector-grid" role="tablist">
+                <button type="button" class="mode-btn active" data-mode="circle" role="tab" id="tab-circle" title="Circular Geofence">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="9"></circle>
+                  </svg>
+                  <span>Circle</span>
+                </button>
 
-              <button type="button" class="mode-btn" data-mode="polygon" role="tab" id="tab-polygon" title="Custom Multi-Point Polygon">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polygon points="12 2 22 8.5 18 20 6 20 2 8.5"></polygon>
-                </svg>
-                <span>Polygon</span>
-              </button>
+                <button type="button" class="mode-btn" data-mode="rectangle" role="tab" id="tab-rectangle" title="Fixed Rectangle Geofence">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="5" width="18" height="14" rx="2"></rect>
+                  </svg>
+                  <span>Rectangle</span>
+                </button>
+
+                <button type="button" class="mode-btn" data-mode="polygon" role="tab" id="tab-polygon" title="Custom Multi-Point Polygon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="12 2 22 8.5 18 20 6 20 2 8.5"></polygon>
+                  </svg>
+                  <span>Polygon</span>
+                </button>
+              </div>
+            </section>
+
+            <!-- Instructions banner -->
+            <div id="drawing-instruction" class="instruction-banner">
+              Click any location on the map to place circle center, then drag the radius handle to resize.
             </div>
-          </section>
 
-          <!-- Instructions banner -->
-          <div id="drawing-instruction" class="instruction-banner">
-            Click any location on the map to place circle center, then drag the radius handle to resize.
+            <!-- Configuration Form Card -->
+            <section class="form-card">
+              <div class="sidebar-section-title">
+                <span id="form-card-title">Geofence Parameters</span>
+              </div>
+
+              <!-- 1. Circle Mode Inputs -->
+              <div id="section-circle" class="mode-form-section">
+                <div class="form-group">
+                  <label class="form-label">Center Point</label>
+                  <div class="form-row">
+                    <div>
+                      <input type="text" id="circle-lat" class="form-input monospace" placeholder="Latitude (e.g. 30.123456)">
+                    </div>
+                    <div>
+                      <input type="text" id="circle-lng" class="form-input monospace" placeholder="Longitude (e.g. 78.123456)">
+                    </div>
+                  </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 0.6rem;">
+                  <div class="toggle-row">
+                    <label class="form-label" for="circle-radius">Radius (meters)</label>
+                  </div>
+                  <input type="number" id="circle-radius" class="form-input monospace" value="200" min="10" max="100000" step="10">
+
+                  <div class="radius-slider-wrapper" style="margin-top: 0.4rem;">
+                    <input type="range" id="circle-radius-slider" class="radius-slider" min="20" max="2500" step="10" value="200">
+                  </div>
+
+                  <div class="radius-presets-row">
+                    <button type="button" class="preset-pill" data-radius-preset="50">50m</button>
+                    <button type="button" class="preset-pill" data-radius-preset="100">100m</button>
+                    <button type="button" class="preset-pill" data-radius-preset="200">200m</button>
+                    <button type="button" class="preset-pill" data-radius-preset="500">500m</button>
+                    <button type="button" class="preset-pill" data-radius-preset="1000">1 km</button>
+                    <button type="button" class="preset-pill" data-radius-preset="2000">2 km</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 2. Rectangle Mode Inputs -->
+              <div id="section-rectangle" class="mode-form-section hidden">
+                <div class="form-group">
+                  <label class="form-label">Bounding Coordinates</label>
+                  <div class="form-row">
+                    <div>
+                      <label class="form-label" style="font-size: 0.65rem;" for="rect-north">North Lat</label>
+                      <input type="text" id="rect-north" class="form-input monospace" placeholder="North (e.g. 30.125000)">
+                    </div>
+                    <div>
+                      <label class="form-label" style="font-size: 0.65rem;" for="rect-south">South Lat</label>
+                      <input type="text" id="rect-south" class="form-input monospace" placeholder="South (e.g. 30.120000)">
+                    </div>
+                  </div>
+                  <div class="form-row" style="margin-top: 0.4rem;">
+                    <div>
+                      <label class="form-label" style="font-size: 0.65rem;" for="rect-east">East Lng</label>
+                      <input type="text" id="rect-east" class="form-input monospace" placeholder="East (e.g. 78.130000)">
+                    </div>
+                    <div>
+                      <label class="form-label" style="font-size: 0.65rem;" for="rect-west">West Lng</label>
+                      <input type="text" id="rect-west" class="form-input monospace" placeholder="West (e.g. 78.120000)">
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 3. Custom Polygon Mode Inputs -->
+              <div id="section-polygon" class="mode-form-section hidden">
+                <div class="form-group">
+                  <div class="toggle-row">
+                    <label class="form-label">Vertices (<span id="polygon-points-count">0</span> points)</label>
+                  </div>
+                  <div id="polygon-draft-points" class="polygon-points-box">
+                    <div class="empty-hint">No vertices added yet. Click map to add.</div>
+                  </div>
+                </div>
+
+                <div class="polygon-controls-bar" style="margin-top: 0.5rem;">
+                  <button type="button" id="btn-finish-polygon" class="btn-secondary finish-btn" title="Complete the polygon ring">
+                    &#10003; Finish Polygon
+                  </button>
+                  <button type="button" id="btn-clear-polygon" class="btn-secondary" title="Clear current points">
+                    Clear Points
+                  </button>
+                </div>
+              </div>
+
+              <!-- Common Metadata -->
+              <div class="form-group" style="margin-top: 0.5rem; border-top: 1px solid var(--border-subtle); padding-top: 0.75rem;">
+                <label class="form-label" for="fence-name">Geofence Name</label>
+                <input type="text" id="fence-name" class="form-input" placeholder="e.g. Headquarters Zone A">
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="fence-desc">Notes / Description (Optional)</label>
+                <input type="text" id="fence-desc" class="form-input" placeholder="e.g. Main warehouse secure perimeter">
+              </div>
+
+              <div class="form-row" style="align-items: center;">
+                <div>
+                  <label class="form-label">Zone Color</label>
+                  <div class="color-picker-row">
+                    <label class="color-option">
+                      <input type="radio" name="fence-color" value="#2563eb" checked>
+                      <span class="color-dot-indicator" style="background-color: #2563eb;"></span>
+                    </label>
+                    <label class="color-option">
+                      <input type="radio" name="fence-color" value="#10b981">
+                      <span class="color-dot-indicator" style="background-color: #10b981;"></span>
+                    </label>
+                    <label class="color-option">
+                      <input type="radio" name="fence-color" value="#8b5cf6">
+                      <span class="color-dot-indicator" style="background-color: #8b5cf6;"></span>
+                    </label>
+                    <label class="color-option">
+                      <input type="radio" name="fence-color" value="#f59e0b">
+                      <span class="color-dot-indicator" style="background-color: #f59e0b;"></span>
+                    </label>
+                    <label class="color-option">
+                      <input type="radio" name="fence-color" value="#ef4444">
+                      <span class="color-dot-indicator" style="background-color: #ef4444;"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <div>
+                  <label class="form-label">Initial Status</label>
+                  <div class="toggle-row" style="margin-top: 4px;">
+                    <span style="font-size: 0.75rem; color: var(--text-secondary);">Active</span>
+                    <label class="toggle-switch">
+                      <input type="checkbox" id="fence-status" checked>
+                      <span class="slider round"></span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Primary Buttons -->
+              <div class="action-buttons-group" style="margin-top: 0.5rem;">
+                <button type="button" id="btn-save-geofence" class="btn-primary">
+                  <span class="icon">+</span> Save Geofence
+                </button>
+                <button type="button" id="btn-cancel-geofence" class="btn-secondary">
+                  Cancel
+                </button>
+                <button type="button" id="btn-clear-shape" class="btn-secondary">
+                  Clear Shape Draft
+                </button>
+              </div>
+            </section>
           </div>
-
-          <!-- Configuration Form Card -->
-          <section class="form-card">
-            <div class="sidebar-section-title">
-              <span id="form-card-title">Geofence Parameters</span>
-            </div>
-
-            <!-- 1. Circle Mode Inputs -->
-            <div id="section-circle" class="mode-form-section">
-              <div class="form-group">
-                <label class="form-label">Center Point</label>
-                <div class="form-row">
-                  <div>
-                    <input type="text" id="circle-lat" class="form-input monospace" placeholder="Latitude (e.g. 30.123456)">
-                  </div>
-                  <div>
-                    <input type="text" id="circle-lng" class="form-input monospace" placeholder="Longitude (e.g. 78.123456)">
-                  </div>
-                </div>
-              </div>
-
-              <div class="form-group" style="margin-top: 0.6rem;">
-                <div class="toggle-row">
-                  <label class="form-label" for="circle-radius">Radius (meters)</label>
-                </div>
-                <input type="number" id="circle-radius" class="form-input monospace" value="200" min="10" max="100000" step="10">
-
-                <div class="radius-slider-wrapper" style="margin-top: 0.4rem;">
-                  <input type="range" id="circle-radius-slider" class="radius-slider" min="20" max="2500" step="10" value="200">
-                </div>
-
-                <div class="radius-presets-row">
-                  <button type="button" class="preset-pill" data-radius-preset="50">50m</button>
-                  <button type="button" class="preset-pill" data-radius-preset="100">100m</button>
-                  <button type="button" class="preset-pill" data-radius-preset="200">200m</button>
-                  <button type="button" class="preset-pill" data-radius-preset="500">500m</button>
-                  <button type="button" class="preset-pill" data-radius-preset="1000">1 km</button>
-                  <button type="button" class="preset-pill" data-radius-preset="2000">2 km</button>
-                </div>
-              </div>
-            </div>
-
-            <!-- 2. Rectangle Mode Inputs -->
-            <div id="section-rectangle" class="mode-form-section hidden">
-              <div class="form-group">
-                <label class="form-label">Bounding Coordinates</label>
-                <div class="form-row">
-                  <div>
-                    <label class="form-label" style="font-size: 0.65rem;" for="rect-north">North Lat</label>
-                    <input type="text" id="rect-north" class="form-input monospace" placeholder="North (e.g. 30.125000)">
-                  </div>
-                  <div>
-                    <label class="form-label" style="font-size: 0.65rem;" for="rect-south">South Lat</label>
-                    <input type="text" id="rect-south" class="form-input monospace" placeholder="South (e.g. 30.120000)">
-                  </div>
-                </div>
-                <div class="form-row" style="margin-top: 0.4rem;">
-                  <div>
-                    <label class="form-label" style="font-size: 0.65rem;" for="rect-east">East Lng</label>
-                    <input type="text" id="rect-east" class="form-input monospace" placeholder="East (e.g. 78.130000)">
-                  </div>
-                  <div>
-                    <label class="form-label" style="font-size: 0.65rem;" for="rect-west">West Lng</label>
-                    <input type="text" id="rect-west" class="form-input monospace" placeholder="West (e.g. 78.120000)">
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- 3. Custom Polygon Mode Inputs -->
-            <div id="section-polygon" class="mode-form-section hidden">
-              <div class="form-group">
-                <div class="toggle-row">
-                  <label class="form-label">Vertices (<span id="polygon-points-count">0</span> points)</label>
-                </div>
-                <div id="polygon-draft-points" class="polygon-points-box">
-                  <div class="empty-hint">No vertices added yet. Click map to add.</div>
-                </div>
-              </div>
-
-              <div class="polygon-controls-bar" style="margin-top: 0.5rem;">
-                <button type="button" id="btn-finish-polygon" class="btn-secondary finish-btn" title="Complete the polygon ring">
-                  &#10003; Finish Polygon
-                </button>
-                <button type="button" id="btn-clear-polygon" class="btn-secondary" title="Clear current points">
-                  Clear Points
-                </button>
-              </div>
-            </div>
-
-            <!-- Common Metadata -->
-            <div class="form-group" style="margin-top: 0.5rem; border-top: 1px solid var(--border-subtle); padding-top: 0.75rem;">
-              <label class="form-label" for="fence-name">Geofence Name</label>
-              <input type="text" id="fence-name" class="form-input" placeholder="e.g. Headquarters Zone A">
-            </div>
-
-            <div class="form-group">
-              <label class="form-label" for="fence-desc">Notes / Description (Optional)</label>
-              <input type="text" id="fence-desc" class="form-input" placeholder="e.g. Main warehouse secure perimeter">
-            </div>
-
-            <div class="form-row" style="align-items: center;">
-              <div>
-                <label class="form-label">Zone Color</label>
-                <div class="color-picker-row">
-                  <label class="color-option">
-                    <input type="radio" name="fence-color" value="#2563eb" checked>
-                    <span class="color-dot-indicator" style="background-color: #2563eb;"></span>
-                  </label>
-                  <label class="color-option">
-                    <input type="radio" name="fence-color" value="#10b981">
-                    <span class="color-dot-indicator" style="background-color: #10b981;"></span>
-                  </label>
-                  <label class="color-option">
-                    <input type="radio" name="fence-color" value="#8b5cf6">
-                    <span class="color-dot-indicator" style="background-color: #8b5cf6;"></span>
-                  </label>
-                  <label class="color-option">
-                    <input type="radio" name="fence-color" value="#f59e0b">
-                    <span class="color-dot-indicator" style="background-color: #f59e0b;"></span>
-                  </label>
-                  <label class="color-option">
-                    <input type="radio" name="fence-color" value="#ef4444">
-                    <span class="color-dot-indicator" style="background-color: #ef4444;"></span>
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                <label class="form-label">Initial Status</label>
-                <div class="toggle-row" style="margin-top: 4px;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);">Active</span>
-                  <label class="toggle-switch">
-                    <input type="checkbox" id="fence-status" checked>
-                    <span class="slider round"></span>
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <!-- Primary Buttons -->
-            <div class="action-buttons-group" style="margin-top: 0.5rem;">
-              <button type="button" id="btn-save-geofence" class="btn-primary">
-                <span class="icon">+</span> Save Geofence
-              </button>
-              <button type="button" id="btn-cancel-geofence" class="btn-secondary hidden">
-                Cancel Edit
-              </button>
-              <button type="button" id="btn-clear-shape" class="btn-secondary">
-                Clear Shape Draft
-              </button>
-            </div>
-          </section>
 
           <!-- Saved Geofences Section -->
           <section class="saved-section">
@@ -316,31 +335,46 @@
               <input type="file" id="file-import-input" accept=".geojson,.json" class="hidden">
             </div>
 
-            <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
-              <button type="button" id="btn-create-sample-fences" class="btn-tool-sm" style="flex: 1; justify-content: center;" title="Create sample demo geofences for quick testing">
-                <span>🎯</span> Sample Fences
-              </button>
-              <button type="button" id="btn-clear-all-fences" class="btn-outline-danger" style="flex: 1; justify-content: center;">
-                Clear All
+            <div style="margin-top: 0.5rem;">
+              <button type="button" id="btn-clear-all-fences" class="btn-outline-danger" style="width: 100%; justify-content: center;">
+                Clear All Fences
               </button>
             </div>
           </section>
 
-          <!-- Simulation, Footprints & Mouse Boundary Flag Engine -->
-          <section class="simulation-section">
+          <!-- Real Connected Phones & Multi-Device Fleet Tracker -->
+          <section class="devices-section" style="margin-bottom: 1.1rem; border-top: 1px solid var(--border-subtle); padding-top: 0.85rem;">
             <div class="sidebar-section-title" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem;">
-              <span>Footprints & Mouse Flags</span>
-              <span id="footprint-count-badge" class="count-pill">0</span>
+              <span style="display:flex; align-items:center; gap:0.4rem;">
+                <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#10b981; box-shadow:0 0 8px rgba(16,185,129,0.6);"></span>
+                Real GPS Devices
+              </span>
+              <div style="display: flex; gap: 0.35rem; align-items: center;">
+                <span id="device-count-badge" class="count-pill" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.35);">0/0</span>
+                <button type="button" id="btn-refresh-devices" class="btn-log-action" title="Refresh registered devices">↻</button>
+              </div>
             </div>
 
-            <div class="sim-switches-grid">
-              <div class="sim-switch-item">
-                <span class="sim-switch-label">Mouse Cross Flag</span>
-                <label class="toggle-switch">
-                  <input type="checkbox" id="toggle-mouse-tracking" checked>
-                  <span class="slider round"></span>
-                </label>
+            <div id="admin-device-list" class="admin-device-list-box">
+              <div class="empty-hint" style="font-size: 0.74rem;">Loading devices...</div>
+            </div>
+          </section>
+
+          <!-- Real-Time Geofence Breach Events Stream -->
+          <section class="simulation-section">
+            <div class="sidebar-section-title" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem;">
+              <span style="display:flex; align-items:center; gap:0.4rem;">
+                <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#38bdf8; box-shadow:0 0 8px rgba(56,189,248,0.6);"></span>
+                Live Breach Events
+              </span>
+              <div style="display: flex; gap: 0.35rem; align-items: center;">
+                <span id="footprint-count-badge" class="count-pill">0</span>
+                <button type="button" id="btn-refresh-footprints" class="btn-log-action" title="Refresh log from database">↻</button>
+                <button type="button" id="btn-clear-footprints" class="btn-log-action" title="Clear event history">✕</button>
               </div>
+            </div>
+
+            <div class="sim-switches-grid" style="grid-template-columns: 1fr 1fr;">
               <div class="sim-switch-item">
                 <span class="sim-switch-label">Show Footprints</span>
                 <label class="toggle-switch">
@@ -357,25 +391,8 @@
               </div>
             </div>
 
-            <div class="sim-actions-row">
-              <button type="button" id="btn-generate-footprints" class="btn-tool-sm" title="Generate dummy data points inside created fence area">
-                <span>👣</span> Drop 5 in Area
-              </button>
-              <button type="button" id="btn-toggle-simulation" class="btn-tool-sm btn-sim-play" title="Simulate moving assets inside created fence area">
-                <span id="btn-simulation-icon">▶</span> <span id="btn-simulation-text">Start Simulation</span>
-              </button>
-            </div>
-
-            <div class="log-panel-header">
-              <span class="log-panel-title">Real-Time Event Stream</span>
-              <div class="log-panel-tools">
-                <button type="button" id="btn-refresh-footprints" class="btn-log-action" title="Refresh log from database">↻</button>
-                <button type="button" id="btn-clear-footprints" class="btn-log-action" title="Clear logs and footprint points">✕</button>
-              </div>
-            </div>
-
             <div id="footprints-log-list" class="footprints-log-box">
-              <div class="empty-hint" style="font-size: 0.74rem;">No footprints or flag events yet. Move mouse over fences or click Drop 5 in Area.</div>
+              <div class="empty-hint" style="font-size: 0.74rem;">No boundary transition events recorded yet. When real devices enter or exit active fences, live alerts appear here.</div>
             </div>
           </section>
         </div>
@@ -388,11 +405,6 @@
           <div id="hud-cursor-coords" class="hud-chip">
             <span class="hud-label">Cursor:</span>
             <span class="hud-val muted">Move over map...</span>
-          </div>
-
-          <div id="hud-mouse-fence" class="hud-chip">
-            <span class="hud-label">Mouse Fence:</span>
-            <span id="hud-mouse-fence-val" class="hud-val muted">Outside Fences</span>
           </div>
 
           <div id="hud-flag-count" class="hud-chip">
@@ -409,6 +421,18 @@
             <span class="hud-label">Zoom:</span>
             <span class="hud-val monospace">15</span>
           </div>
+        </div>
+
+        <!-- Floating Active Device History HUD -->
+        <div id="device-history-panel" class="device-history-hud hidden">
+          <div class="history-hud-left">
+            <span class="history-pulse-dot"></span>
+            <div>
+              <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase;">Active History Trail</div>
+              <strong id="history-device-title" style="color: #38bdf8;">Device Path</strong> • <span id="history-point-count" style="font-size: 0.75rem; color: #cbd5e1;">0 pts</span>
+            </div>
+          </div>
+          <button type="button" id="btn-clear-history-trail" class="btn-close-history" title="Clear path trail from map">✕ Close Trail</button>
         </div>
 
         <!-- The Leaflet Map Canvas -->
@@ -481,6 +505,38 @@
       </div>
     </div>
 
+    <!-- Connect Phone QR & URL Modal -->
+    <div id="connect-phone-modal" class="modal-overlay hidden">
+      <div class="modal-card" style="max-width: 440px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
+          <h3 class="modal-title" style="display:flex; align-items:center; gap:0.5rem;">
+            <span>📱</span> Connect Mobile Phone
+          </h3>
+          <button type="button" id="btn-close-connect-modal" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:1.3rem; line-height:1;">✕</button>
+        </div>
+
+        <p style="font-size: 0.84rem; color: var(--text-muted); line-height: 1.45; margin-top: 0.5rem;">
+          Open the GPS tracking client on your mobile phone or in a new browser tab to stream real-time coordinates to this dashboard:
+        </p>
+
+        <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 0.85rem; display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.35rem;">
+          <label style="font-size: 0.75rem; color: #94a3b8; font-weight: 500;">GPS Tracking URL</label>
+          <div style="display: flex; gap: 0.4rem;">
+            <input type="text" id="qr-tracker-link" readonly style="flex: 1; background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 7px 10px; color: #38bdf8; font-family: monospace; font-size: 0.82rem;" value="">
+            <button type="button" id="btn-copy-tracker-link" class="btn-primary" style="width: auto; padding: 6px 14px; font-size: 0.8rem;">Copy</button>
+            <a id="btn-open-tracker-tab" href="/track" target="_blank" class="btn-secondary" style="padding: 6px 14px; font-size: 0.8rem; text-decoration: none; display: flex; align-items: center; justify-content: center; gap: 3px; border-radius: 6px; color: var(--text-main); font-weight: 600;">Open Tab ↗</a>
+          </div>
+        </div>
+
+        <div style="background: rgba(16, 185, 129, 0.08); border: 1px dashed rgba(16, 185, 129, 0.3); border-radius: 12px; padding: 0.75rem 1rem; font-size: 0.8rem; color: #6ee7b7; line-height: 1.45; margin-top: 0.35rem;">
+          <strong>Quick Steps:</strong><br>
+          1. Click <strong>"Open Tab ↗"</strong> (or copy the URL to your phone).<br>
+          2. Tap <strong>"Allow Location Access"</strong> when prompted.<br>
+          3. Tap <strong>"Start GPS Tracking"</strong> — your device will immediately appear online on this map!
+        </div>
+      </div>
+    </div>
+
     <!-- Toast Notifications Container -->
     <div id="toast-container" class="toast-container"></div>
   </div>
@@ -498,5 +554,8 @@
 
   <!-- Application Bundle (Works on both HTTP and direct file://) -->
   <script src="js/bundle.js"></script>
+
+  <!-- Admin Real Multi-Device Manager & Movement History -->
+  <script src="js/admin-devices.js"></script>
 </body>
 </html>

@@ -30,3 +30,7 @@ brag-output/
 **/renders/
 **/.thumbnails/
 
+# Scratch & Temporary Test Scripts
+scratch/
+
+

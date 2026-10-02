@@ -8,6 +8,18 @@
     {
       "source": "/api",
       "destination": "/api/index.py"
+    },
+    {
+      "source": "/track",
+      "destination": "/track.html"
+    },
+    {
+      "source": "/user",
+      "destination": "/track.html"
+    },
+    {
+      "source": "/admin",
+      "destination": "/index.html"
     }
   ]
 }

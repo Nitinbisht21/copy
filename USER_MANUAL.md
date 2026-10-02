@@ -17,10 +17,13 @@ A comprehensive operational manual and technical guide for configuring, managing
 6. [Live Multi-Asset Simulation Engine](#6-live-multi-asset-simulation-engine)
    - [Assets & Kinetic Modeling](#assets--kinetic-modeling)
    - [Lifecycle: Entry, Interior Cruising, Exit & Re-Entry](#lifecycle-entry-interior-cruising-exit--re-entry)
-   - [Simulation Controls](#simulation-controls)
+6. [Real GPS Multi-Device Ingestion & Mobile Tracker](#6-real-gps-multi-device-ingestion--mobile-tracker)
+   - [Mobile Phone GPS Client (`/track`)](#mobile-phone-gps-client-track)
+   - [Multi-Device Fleet Monitoring](#multi-device-fleet-monitoring)
+   - [Persistent Boundary Breach Engine](#persistent-boundary-breach-engine)
 7. [Flag & Footprint Display Controls](#7-flag--footprint-display-controls)
 8. [MongoDB Atlas & Compass Database Guide](#8-mongodb-atlas--compass-database-guide)
-   - [Database Roles: Simulation DB vs Dummy DB](#database-roles-simulation-db-vs-dummy-db)
+   - [Database Roles: Geofences DB vs Tracking DB](#database-roles-geofences-db-vs-tracking-db)
    - [Document Schemas](#document-schemas)
    - [Inspecting Data in MongoDB Compass](#inspecting-data-in-mongodb-compass)
 9. [Data Management & GeoJSON Integration](#9-data-management--geojson-integration)
@@ -31,26 +34,25 @@ A comprehensive operational manual and technical guide for configuring, managing
 
 ## 1. System Overview & Architecture
 
-Virtual Fence Map Builder is a high-performance web GIS and perimeter security application. It enables operators to draw virtual boundaries over multi-style base maps (Google Satellite, Hybrid, Streets, OpenStreetMap, Esri) and monitor continuous telemetry streams against those perimeters in real time.
+Virtual Fence Map Builder is a high-performance web GIS and perimeter security application. It enables operators to draw virtual boundaries over multi-style base maps (Google Satellite, Hybrid, Streets, OpenStreetMap, Esri) and track real GPS devices and smartphones with persistent boundary breach detection in real time.
 
 ```mermaid
 graph TD
-    UI[Browser Dashboard / Leaflet Canvas] -->|Draw / Edit Fences| Store[Client Geofence Store]
-    UI -->|Mouse Telemetry & Flags| API[Python Flask REST API]
-    UI -->|Simulation Engine (3s Loop)| Kinematics[Kinematic Vector Stepper]
-    Kinematics -->|Perimeter Boundary Evaluation| Flags[Visual Flag Radar Pins & Toasts]
-    Kinematics -->|POST /api/footprints| API
-    API -->|Active Geofences & Live Telemetry| SimDB[(MongoDB: simulation_data_db)]
-    API -->|On-Demand Synthetic Sequences| DummyDB[(MongoDB: dummy_data_db)]
-    Compass[MongoDB Compass] -.->|Direct Cluster Inspection| SimDB
-    Compass -.->|Direct Cluster Inspection| DummyDB
+    Phone[Mobile Phone / GPS Tracker /track] -->|POST /api/telemetry| Ingest[Telemetry Ingestion Pipeline]
+    Ingest -->|Spatial Mathematics| Engine[Geofence Engine Circle / Rect / Poly]
+    Engine -->|Persistent Boundary Transitions| Events[geofence_events ENTER / EXIT]
+    Ingest -->|GeoJSON Point 2dsphere| Locs[(MongoDB: tracking_data_db.locations)]
+    Events --> LocsDB[(MongoDB: tracking_data_db.geofence_events)]
+    Admin[Admin Dashboard /] -->|Manage Fences| Geofences[(MongoDB: simulation_data_db.geofences)]
+    Admin -->|Live Device Markers & Path Trail| LiveTrail[Leaflet Map View]
+    Compass[MongoDB Compass] -.->|Direct Cluster Inspection| LocsDB
 ```
 
 ### Core Technologies
-- **Frontend**: Leaflet.js, HTML5, Vanilla JavaScript, CSS3 with responsive glassmorphism aesthetic.
+- **Frontend**: Leaflet.js, HTML5 Geolocation API, Vanilla JavaScript, CSS3 with responsive glassmorphism aesthetic.
 - **Containment Calculations**: Haversine Spherical Distance formula (Circles), Bounding Box intersection (Rectangles), Jordan Curve Ray-Casting algorithm (Polygons).
 - **Backend**: Python 3 (Flask or Python standard HTTP engine).
-- **Database**: MongoDB Atlas Cluster (split across `simulation_data_db` and `dummy_data_db`).
+- **Database**: MongoDB Atlas Cluster split across `simulation_data_db` (geofences) and `tracking_data_db` (devices, locations, events).
 
 ---
 
@@ -75,7 +77,7 @@ MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-url>.mongodb.net/?retry
 
 # Primary Databases
 MONGODB_SIMULATION_DB=simulation_data_db
-MONGODB_DUMMY_DB=dummy_data_db
+MONGODB_TRACKING_DB=tracking_data_db
 
 # Web Server Port
 PORT=5000
@@ -95,14 +97,15 @@ The terminal will confirm the connection to MongoDB Atlas:
 ================================================================
 >> GEOFENCE MAP BUILDER - PYTHON BACKEND
 >> Exclusive Database Engine: MongoDB Atlas & Compass
->> 1. Simulation DB (Live data, mouse, fences): 'simulation_data_db'
->> 2. Dummy Data DB (Area ENTER/INSIDE/EXIT):   'dummy_data_db'
+>> 1. Geofences DB: 'simulation_data_db' (geofences, simulation_footprints)
+>> 2. Tracking DB:  'tracking_data_db' (devices, locations, geofence_events)
 >> Serving Dashboard at: http://localhost:5000
 ================================================================
 ```
 
 ### Step 4: Open the Dashboard
-Navigate to `http://localhost:5000` in Google Chrome, Microsoft Edge, Firefox, or Safari.
+- Admin Dashboard: `http://localhost:5000`
+- Mobile Tracker: `http://localhost:5000/track`
 
 ---
 
@@ -216,72 +219,44 @@ The system features real-time cursor boundary analysis that turns your mouse poi
 
 ---
 
-## 6. Live Multi-Asset Simulation Engine
+## 6. Real GPS Multi-Device Ingestion & Mobile Tracker
 
-The live asset simulation loop allows testing automated security patrols without physical GPS devices.
+The platform runs on real GPS telemetry from mobile phones and external tracking devices.
 
-```
-       [Drone Alpha] (North Edge)
-             │
-             ▼ (Heading South)
-      ┌───────────────┐
-      │  🚩 ENTER     │
-      │               │
-[Scout 9] ──►         │         ◄── [Patrol 101]
-(West)   🚩 ENTER     │             (South-East)
-      │               │
-      │      🚩 EXIT  │
-      └───────┬───────┘
-              │ (Turns around after 2 steps outside)
-              ▼
-```
+### Mobile Phone GPS Client (`/track`)
+- Navigate to `http://localhost:5000/track` on any mobile phone or browser.
+- Uses HTML5 Geolocation `navigator.geolocation.watchPosition` with `enableHighAccuracy: true`.
+- Keeps the screen awake using the Screen Wake Lock API (`navigator.wakeLock.request('screen')`).
+- Automatically buffers locations in `localStorage` when offline and flushes when reconnected.
 
-### Assets & Kinetic Modeling
-The simulation runs three distinct operational assets:
-1. **Drone Alpha** (Green Avatar): Approaches from the **North** edge (`-90°`), patrolling at 18 m/step.
-2. **Patrol 101** (Blue Avatar): Approaches from the **South-East** edge (`+30°`), patrolling at 21 m/step.
-3. **Scout 9** (Orange Avatar): Approaches from the **West** edge (`+150°`), patrolling at 24 m/step.
+### Multi-Device Fleet Monitoring
+- Real-time device registry tracks status (`online`, `inactive`, `offline`), platform, accuracy, battery, and last seen.
+- Admin dashboard polls `/api/devices` every 4 seconds, rendering live pulsed markers with heading arrows on the Leaflet canvas.
+- Click any device in the sidebar to inspect its details and view its full historical movement path trail on the map.
 
-### Lifecycle: Entry, Interior Cruising, Exit & Re-Entry
-- **Stage 1 (Staged Entry)**: Assets begin strictly outside the fence boundary facing the center. On the first step, all three assets cross the perimeter from their respective sides:
-  - 🚩 Green flags are planted:
-    - `ENTER: Drone Alpha - <FenceName>`
-    - `ENTER: Patrol 101 - <FenceName>`
-    - `ENTER: Scout 9 - <FenceName>`
-  - Three success toasts notify the operator of perimeter entries.
-- **Stage 2 (Interior Patrol)**: Assets cruise smoothly across the fence interior, leaving blue breadcrumb footprint dots every 3 seconds.
-- **Stage 3 (Boundary Exit)**: Upon reaching the opposite side of the fence, the assets breach the perimeter outward:
-  - 🚩 Red flags are planted: `EXIT: <Asset> - <FenceName>`.
-  - Warning toasts alert of boundary exits.
-- **Stage 4 (Kinematic Re-Entry)**: After taking 2 steps outside (~25–40m), assets execute a smooth U-turn heading back toward the fence center, re-entering the fence and planting new green `ENTER` flags.
-
-> [!NOTE]
-> The simulation refresh rate is set to 3 seconds (`3000ms`), providing clear visual feedback and realistic ground speeds.
-
-### Simulation Controls
-- **▶ Start Simulation**: Initiates the 3-second simulation loop. If assets were stopped, they re-stage cleanly outside the currently active/selected fence.
-- **⏸ Pause Simulation**: Halts asset movements in place.
-- **Automatic Fence Target Switching**: If you create a new geofence (e.g. `Geofence 2`) or select a different fence from the list, the assets automatically re-stage around the new fence and enter it.
+### Persistent Boundary Breach Engine
+- Ingested coordinates are mathematically evaluated against all active circle, rectangle, and polygon geofences.
+- Boundary states are persisted in the `device_geofence_state` collection.
+- `ENTER` and `EXIT` events are recorded ONLY when a real device crosses a physical boundary perimeter, avoiding duplicate false triggers.
 
 ---
 
 ## 7. Flag & Footprint Display Controls
 
-Located under the **Footprints & Mouse Flags** section in the sidebar:
+Located under the **Live Breach Events** section in the sidebar:
 
 | Control Toggle | When ON (Checked) | When OFF (Unchecked) |
 |---|---|---|
-| **Mouse Cross Flag** | Detects mouse cursor crossing into/out of active fences. | Disables mouse boundary evaluation. |
-| **Show Footprints** | Displays breadcrumb trail rings (`👣`) on the map canvas. | Hides breadcrumbs from map (data still logged). |
-| **Show Flags** | Renders visual radar pins (`🚩 ENTER` / `🚩 EXIT`) on the map canvas. | **Suppresses map flag pins** for a clean map view, while still providing toast messages, HUD counter increments, and database logging. |
+| **Show Footprints** | Displays breadcrumb trail dots on the map canvas. | Hides breadcrumbs from map (events still logged). |
+| **Show Flags** | Renders visual radar pins (`🚩 ENTER` / `🚩 EXIT`) on the map canvas. | Suppresses map flag pins for a clean map view, while still providing toast messages, HUD counter increments, and database logging. |
 
 ---
 
 ## 8. MongoDB Atlas & Compass Database Guide
 
-### Database Roles: Simulation DB vs Dummy DB
+### Database Roles: Geofences DB vs Tracking DB
 
-The system cleanly separates telemetry data into two distinct databases in your MongoDB Atlas cluster:
+The system cleanly organizes data into two specialized databases in your MongoDB Atlas cluster:
 
 ```mermaid
 graph LR
@@ -290,49 +265,58 @@ graph LR
             C1[geofences]
             C2[simulation_footprints]
         end
-        subgraph dummy_data_db
-            C3[dummy_footprints]
+        subgraph tracking_data_db
+            C3[users]
+            C4[devices]
+            C5[locations GeoJSON 2dsphere]
+            C6[geofence_events]
+            C7[device_geofence_state]
         end
     end
 ```
 
 1. **`simulation_data_db`**:
    - **`geofences`**: Stores all saved boundary perimeters, coordinates, radii, and statuses.
-   - **`simulation_footprints`**: Contains real-time telemetry from live mouse navigation, map clicks, and the live 3-second multi-asset simulation loop.
-2. **`dummy_data_db`**:
-   - **`dummy_footprints`**: Contains on-demand synthetic test sequences generated via the **Drop 5 in Area** button or `POST /api/simulation/generate`.
+   - **`simulation_footprints`**: Contains real-time breach event logs mirroring GPS transitions.
+2. **`tracking_data_db`**:
+   - **`devices`**: Device registry, connection status, platform, and last-seen metadata.
+   - **`locations`**: GeoJSON 2dsphere spatial points recording full device movement histories.
+   - **`geofence_events`**: Immutable audit logs of every boundary enter/exit event.
+   - **`device_geofence_state`**: State tracker ensuring transitions fire only on true boundary crossing.
 
 ### Document Schemas
 
-#### Geofence Record (`simulation_data_db.geofences`):
+#### Real Location Record (`tracking_data_db.locations`):
 ```json
 {
-  "id": "geo_1790610000000_a1b2c3",
-  "name": "Geofence 2",
-  "type": "circle",
-  "coordinates": { "lat": 30.123456, "lng": 78.123456 },
-  "radius": 320.0,
-  "status": "active",
-  "color": "#2563eb",
-  "description": "Primary facility security zone",
-  "created_at": "2026-09-29T08:00:00.000Z",
-  "updated_at": "2026-09-29T08:00:00.000Z"
+  "location_id": "loc_1790610005000_d4e5f6",
+  "device_id": "phone_pixel_7a",
+  "location": {
+    "type": "Point",
+    "coordinates": [78.123456, 30.124500]
+  },
+  "latitude": 30.124500,
+  "longitude": 78.123456,
+  "accuracy": 8.4,
+  "heading": 142.0,
+  "speed": 1.4,
+  "battery": 87,
+  "timestamp": "2026-10-01T12:00:03.000Z"
 }
 ```
 
-#### Simulation Telemetry Record (`simulation_data_db.simulation_footprints`):
+#### Boundary Event Record (`tracking_data_db.geofence_events`):
 ```json
 {
-  "id": "fp_1790610005000_d4e5f6",
-  "device_id": "Drone Alpha",
+  "event_id": "evt_1790610005000_a1b2c3",
+  "device_id": "phone_pixel_7a",
+  "device_name": "Nitin's Pixel",
   "geofence_id": "geo_1790610000000_a1b2c3",
-  "geofence_name": "Geofence 2",
+  "geofence_name": "Main Perimeter",
+  "event_type": "ENTER",
   "latitude": 30.124500,
   "longitude": 78.123456,
-  "event": "ENTER",
-  "color": "#10b981",
-  "source": "simulation_loop",
-  "created_at": "2026-09-29T08:00:03.000Z"
+  "timestamp": "2026-10-01T12:00:03.000Z"
 }
 ```
 
@@ -344,10 +328,11 @@ graph LR
    mongodb+srv://<username>:<password>@<cluster-url>.mongodb.net/?retryWrites=true&w=majority
    ```
 3. Click **Connect**.
-4. Both databases (`simulation_data_db` and `dummy_data_db`) will appear in the left database navigation pane:
-   - Click **`simulation_data_db` &rarr; `geofences`** to view all active and saved boundary configurations.
-   - Click **`simulation_data_db` &rarr; `simulation_footprints`** to see incoming real-time telemetry from `Drone Alpha`, `Patrol 101`, `Scout 9`, and `MOUSE_POINTER`.
-   - Click the circular Refresh (**⟳**) button in Compass at any time to see newly streamed events.
+4. Explore your collections:
+   - Click **`simulation_data_db` &rarr; `geofences`** to view active geofences.
+   - Click **`tracking_data_db` &rarr; `devices`** to inspect registered hardware.
+   - Click **`tracking_data_db` &rarr; `locations`** to view GeoJSON spatial data.
+   - Click **`tracking_data_db` &rarr; `geofence_events`** to view perimeter breaches.
 
 ---
 
@@ -363,12 +348,6 @@ graph LR
 2. Select any standard `.geojson` or `.json` file containing `Polygon`, `Point` (with radius property), or `MultiPolygon` geometries.
 3. The dashboard parses the coordinates, verifies topology, renders the shapes on the map, and stores them in MongoDB.
 
-### Sample Demo Fences
-Click **🎯 Sample Fences** to instantly populate the map with three pre-configured demo zones:
-- `Sample Perimeter Alpha` (Circle, 320m)
-- `Demo Sector B Depot` (Rectangle)
-- `Headquarters Security Zone` (Circle, 200m)
-
 ---
 
 ## 10. Troubleshooting & FAQ
@@ -376,12 +355,13 @@ Click **🎯 Sample Fences** to instantly populate the map with three pre-config
 ### Q: Why are flag markers not appearing on the map canvas?
 - Check the **Show Flags** switch in the sidebar. If this switch is toggled **OFF**, visual flag radar pins on the map canvas are intentionally hidden to keep the map clean, but toast alerts and database telemetry logging continue to function. Toggle **Show Flags** to **ON** to see map pins.
 
-### Q: Why are Drone Alpha and Scout 9 not generating ENTER flags?
-- Ensure the simulation is running (**Pause Simulation** button is visible).
-- When you click **Start Simulation** or create/select a new fence, all assets automatically stage outside the perimeter and cross the boundary within the first step, triggering green `ENTER` flags for all three assets.
+### Q: How do I track a real smartphone?
+- Open `http://<server-ip>:5000/track` on the phone's browser.
+- Enter a device name and tap **Start Tracking**. Allow location access when prompted.
+- The phone will automatically register with the backend and begin streaming high-accuracy GPS coordinates.
 
 ### Q: How do I clear all historical footprints and flag markers?
-- In the sidebar under **Footprints & Mouse Flags**, click the **✕** button in the Real-Time Event Stream header, or click **Clear All** in the Saved Geofences section. This clears markers from the map and issues a `DELETE /api/footprints` request to clear MongoDB logs.
+- In the sidebar under **Live Breach Events**, click the **✕** button to clear the event logs and markers.
 
 ### Q: The map shows "Offline / In-Memory Mode" instead of MongoDB.
 - Verify that your MongoDB Atlas cluster IP access list allows connections from your current IP address (in the Atlas web console, go to **Network Access &rarr; Add IP Address &rarr; Allow Access from Anywhere `0.0.0.0/0`** for testing).
@@ -402,12 +382,7 @@ Because Vercel Serverless Functions execute on dynamic IP addresses, you must al
 5. Click **Confirm**.
 
 ### Step 2: Push Your Code to GitHub
-Ensure all code and configuration files (`api/index.py`, `vercel.json`, `requirements.txt`) are committed and pushed to your GitHub repository:
-```bash
-git add .
-git commit -m "feat: configure Vercel serverless deployment"
-git push origin main
-```
+Ensure all code and configuration files (`api/index.py`, `vercel.json`, `requirements.txt`) are committed and pushed to your GitHub repository.
 
 ### Step 3: Import Project into Vercel
 1. Go to [vercel.com](https://vercel.com) and log in with your GitHub account.
@@ -421,8 +396,8 @@ Under **Environment Variables**, add the following keys:
 | Key | Recommended Value | Note |
 |---|---|---|
 | `MONGODB_URI` | `mongodb+srv://<user>:<password>@cluster0...mongodb.net/?retryWrites=true&w=majority` | Your Atlas connection string |
-| `MONGODB_SIMULATION_DB` | `simulation_data_db` | Live mouse, telemetry & geofence collection |
-| `MONGODB_DUMMY_DB` | `dummy_data_db` | Multi-asset simulated flag collection |
+| `MONGODB_SIMULATION_DB` | `simulation_data_db` | Geofence collection database |
+| `MONGODB_TRACKING_DB` | `tracking_data_db` | Real GPS multi-device tracking database |
 
 ### Step 5: Click Deploy
 1. Click the blue **Deploy** button.
