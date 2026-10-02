@@ -63,6 +63,12 @@ try:
 except ImportError:
     pymongo = None
 
+try:
+    import certifi
+    ca_file = certifi.where()
+except Exception:
+    ca_file = None
+
 # Real GPS Multi-Device Tracking Services
 try:
     from services.db import init_tracking_db
@@ -159,12 +165,15 @@ def init_mongo_connection(silent=False):
     timeout_ms = 2500 if is_vercel else (12000 if 'mongodb+srv' in MONGODB_URI else 3000)
     for uri in candidates:
         try:
-            client = pymongo.MongoClient(
-                uri,
-                serverSelectionTimeoutMS=timeout_ms,
-                connectTimeoutMS=timeout_ms,
-                socketTimeoutMS=timeout_ms
-            )
+            mongo_kwargs = {
+                'serverSelectionTimeoutMS': timeout_ms,
+                'connectTimeoutMS': timeout_ms,
+                'socketTimeoutMS': timeout_ms
+            }
+            if ca_file and ('mongodb+srv' in uri or 'tls=true' in uri or 'ssl=true' in uri):
+                mongo_kwargs['tlsCAFile'] = ca_file
+
+            client = pymongo.MongoClient(uri, **mongo_kwargs)
             client.admin.command('ping')
             mongo_client = client
             mongo_simulation_db = client[MONGODB_SIMULATION_DB]

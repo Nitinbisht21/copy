@@ -46,6 +46,12 @@ mongo_client = None
 tracking_db = None
 use_mongodb = False
 
+try:
+    import certifi
+    ca_file = certifi.where()
+except Exception:
+    ca_file = None
+
 def init_tracking_db(client=None):
     """Initializes collections and indexes on the tracking database."""
     global mongo_client, tracking_db, use_mongodb
@@ -56,12 +62,15 @@ def init_tracking_db(client=None):
         try:
             is_vercel = bool(os.environ.get('VERCEL'))
             timeout_ms = 2500 if is_vercel else (12000 if 'mongodb+srv' in MONGODB_URI else 3000)
-            mongo_client = pymongo.MongoClient(
-                MONGODB_URI,
-                serverSelectionTimeoutMS=timeout_ms,
-                connectTimeoutMS=timeout_ms,
-                socketTimeoutMS=timeout_ms
-            )
+            mongo_kwargs = {
+                'serverSelectionTimeoutMS': timeout_ms,
+                'connectTimeoutMS': timeout_ms,
+                'socketTimeoutMS': timeout_ms
+            }
+            if ca_file and ('mongodb+srv' in MONGODB_URI or 'tls=true' in MONGODB_URI or 'ssl=true' in MONGODB_URI):
+                mongo_kwargs['tlsCAFile'] = ca_file
+
+            mongo_client = pymongo.MongoClient(MONGODB_URI, **mongo_kwargs)
             mongo_client.admin.command('ping')
         except Exception as e:
             use_mongodb = False
