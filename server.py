@@ -81,10 +81,7 @@ except ImportError as e:
     print(f">> [Services Import Warning] {e}")
 
 PORT = int(os.environ.get('PORT', 5000))
-MONGODB_URI = os.environ.get(
-    'MONGODB_URI',
-    'mongodb+srv://nitinbisht2030_db_user:l31tSFIKQCYDa2H1@cluster0.tel123h.mongodb.net/?retryWrites=true&w=majority'
-)
+MONGODB_URI = os.environ.get('MONGODB_URI', 'mongodb://localhost:27017')
 MONGODB_SIMULATION_DB = os.environ.get('MONGODB_SIMULATION_DB', 'simulation_data_db')
 STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
 EARTH_RADIUS_METERS = 6371008.8
@@ -637,6 +634,66 @@ def db_clear_footprints():
 
     return True
 
+def mask_mongodb_uri(uri: str) -> str:
+    """Masks password credentials in MongoDB URI for safe public reporting."""
+    if not uri or '@' not in uri or '://' not in uri:
+        return 'mongodb://localhost:27017'
+    try:
+        prefix, rest = uri.split('://', 1)
+        creds, host_part = rest.split('@', 1)
+        if ':' in creds:
+            user = creds.split(':', 1)[0]
+            return f"{prefix}://{user}:********@{host_part}"
+        return f"{prefix}://********@{host_part}"
+    except Exception:
+        return 'mongodb+srv://********@cluster.mongodb.net/'
+
+# -----------------------------------------------------------------------------
+# SOURCE CODE & ASSET SECURITY: STRICT ACCESS FILTER
+# Strictly prevents public exposure of .env, .git, *.py, services/, models/,
+# internal logs, scripts, and sensitive directories.
+# -----------------------------------------------------------------------------
+ALLOWED_STATIC_PREFIXES = ('css/', 'js/', 'vendor/')
+ALLOWED_ROOT_FILES = {'index.html', 'track.html', 'favicon.ico', 'robots.txt'}
+BLOCKED_EXTENSIONS = (
+    '.py', '.pyc', '.pyd', '.pyo', '.env', '.db', '.sqlite', '.sqlite3',
+    '.log', '.bat', '.cmd', '.ps1', '.sh', '.md', '.txt', '.json',
+    '.yml', '.yaml', '.git', '.lock', '.example', '.ini', '.cfg'
+)
+
+def is_safe_static_request(req_path: str) -> bool:
+    """Verifies that requested path is explicitly in the public asset allowlist."""
+    if not req_path:
+        return False
+
+    clean_path = req_path.replace('\\', '/').strip('/')
+
+    # Block directory traversal
+    if '..' in clean_path or clean_path.startswith('/'):
+        return False
+
+    # Block hidden files or directories (.env, .git, etc.)
+    for segment in clean_path.split('/'):
+        if segment.startswith('.'):
+            return False
+
+    # Block all sensitive extensions
+    lower_path = clean_path.lower()
+    for ext in BLOCKED_EXTENSIONS:
+        if lower_path.endswith(ext):
+            return False
+
+    # Allow exact root files
+    if clean_path in ALLOWED_ROOT_FILES:
+        return True
+
+    # Allow approved asset subdirectories (css/, js/, vendor/)
+    for prefix in ALLOWED_STATIC_PREFIXES:
+        if clean_path.startswith(prefix):
+            return True
+
+    return False
+
 def get_database_status():
     """Returns database status. Exclusively reports live MongoDB state and multi-device telemetry."""
     sim_fences = 0
@@ -666,8 +723,8 @@ def get_database_status():
         'active_database': 'MongoDB Atlas & Compass',
         'active_engine': 'MongoDB',
         'mongodb_connected': use_mongodb,
-        'mongodb_uri': MONGODB_URI,
-        'compass_connection_string': MONGODB_URI,
+        'mongodb_uri': mask_mongodb_uri(MONGODB_URI),
+        'compass_connection_string': mask_mongodb_uri(MONGODB_URI),
         'mongodb_database': MONGODB_SIMULATION_DB,
         'geofences_database': MONGODB_SIMULATION_DB,
         'tracking_database': 'tracking_data_db',
@@ -688,7 +745,15 @@ def get_database_status():
 def create_app():
     from flask import Flask, request, jsonify, send_from_directory
     init_db()
-    app = Flask(__name__, static_folder='.', static_url_path='')
+    app = Flask(__name__, static_folder=None)
+
+    @app.before_request
+    def protect_source_code():
+        path = request.path.lstrip('/')
+        if not path or path in ('track', 'user', 'admin') or path.startswith('api/') or path.startswith('geofences') or path.startswith('footprints') or path.startswith('telemetry'):
+            return None
+        if not is_safe_static_request(path):
+            return jsonify({'error': 'Access denied: Source code and internal configuration files are protected.'}), 403
 
     @app.after_request
     def cors(resp):
@@ -948,6 +1013,8 @@ def create_app():
 
     @app.route('/<path:p>')
     def files(p):
+        if not is_safe_static_request(p):
+            return jsonify({'error': 'Access denied: Source code and internal configuration files are protected.'}), 403
         return send_from_directory('.', p)
 
     return app
@@ -1022,9 +1089,16 @@ def run_builtin():
             else:
                 if path in ('/', '/admin'):
                     self.path = '/index.html'
+                    super().do_GET()
                 elif path in ('/track', '/user'):
                     self.path = '/track.html'
-                super().do_GET()
+                    super().do_GET()
+                else:
+                    clean = path.lstrip('/')
+                    if is_safe_static_request(clean):
+                        super().do_GET()
+                    else:
+                        self.send_json({'error': 'Access denied: Source code and internal configuration files are protected.'}, status=403)
 
         def do_POST(self):
             parsed = urllib.parse.urlparse(self.path)
