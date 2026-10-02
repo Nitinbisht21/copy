@@ -420,6 +420,9 @@
         }
       }
       this.isSending = false;
+      if (this.offlineQueue.length === 0 && !this.isOfflineDueToFence) {
+        this.networkStatus.textContent = 'Active Always • Transmitting Footprints (Every 2 min)';
+      }
     }
 
     updateSyncElapsed() {

@@ -3,11 +3,11 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/api/index.py"
+      "destination": "/api/index.py?__route__=/api/$1"
     },
     {
       "source": "/api",
-      "destination": "/api/index.py"
+      "destination": "/api/index.py?__route__=/api/devices"
     },
     {
       "source": "/track",
@@ -23,3 +23,4 @@
     }
   ]
 }
+

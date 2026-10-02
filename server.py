@@ -749,9 +749,21 @@ def create_app():
 
     @app.before_request
     def protect_source_code():
+        if request.method == 'OPTIONS':
+            resp = app.make_response(('', 200))
+            resp.headers['Access-Control-Allow-Origin'] = '*'
+            resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            return resp
+
         path = request.path.lstrip('/')
-        if not path or path in ('track', 'user', 'admin') or path.startswith('api/') or path.startswith('geofences') or path.startswith('footprints') or path.startswith('telemetry'):
+        # Exempt all API routes, internal functions, and core app pages
+        if (not path or
+            path.startswith('api') or
+            path in ('track', 'user', 'admin', 'index.py', 'api/index.py') or
+            path.startswith(('geofences', 'footprints', 'telemetry', 'devices', 'events', 'auth', 'database', 'network'))):
             return None
+
         if not is_safe_static_request(path):
             return jsonify({'error': 'Access denied: Source code and internal configuration files are protected.'}), 403
 
@@ -811,6 +823,7 @@ def create_app():
 
     # --- Authentication Endpoints ---
     @app.route('/api/auth/register', methods=['POST'])
+    @app.route('/auth/register', methods=['POST'])
     def api_auth_register():
         data = request.get_json(force=True) or {}
         user, err = register_user(
@@ -828,6 +841,7 @@ def create_app():
         return jsonify({'user': user}), 201
 
     @app.route('/api/auth/login', methods=['POST'])
+    @app.route('/auth/login', methods=['POST'])
     def api_auth_login():
         data = request.get_json(force=True) or {}
         res, err = login_user(data.get('email', ''), data.get('password', ''))
@@ -837,6 +851,7 @@ def create_app():
         return jsonify({'user': safe_user, 'token': token})
 
     @app.route('/api/auth/me', methods=['GET'])
+    @app.route('/auth/me', methods=['GET'])
     def api_auth_me():
         user = get_current_user(request)
         if not user:
@@ -845,6 +860,7 @@ def create_app():
 
     # --- Device Management Endpoints ---
     @app.route('/api/devices/register', methods=['POST'])
+    @app.route('/devices/register', methods=['POST'])
     def api_register_device():
         data = request.get_json(force=True) or {}
         user = get_current_user(request)
@@ -860,6 +876,7 @@ def create_app():
         return jsonify(device), 201
 
     @app.route('/api/devices', methods=['GET'])
+    @app.route('/devices', methods=['GET'])
     def api_get_devices():
         user = get_current_user(request)
         filter_uid = None
@@ -870,6 +887,7 @@ def create_app():
         return jsonify(list_devices(user_id=filter_uid, include_revoked=False))
 
     @app.route('/api/devices/<did>', methods=['GET'])
+    @app.route('/devices/<did>', methods=['GET'])
     def api_get_device(did):
         device = get_device(did)
         if not device:
@@ -877,6 +895,7 @@ def create_app():
         return jsonify(device)
 
     @app.route('/api/devices/<did>', methods=['PUT'])
+    @app.route('/devices/<did>', methods=['PUT'])
     def api_update_device(did):
         data = request.get_json(force=True) or {}
         updated = update_device(did, data)
@@ -885,6 +904,7 @@ def create_app():
         return jsonify(updated)
 
     @app.route('/api/devices/<did>', methods=['DELETE'])
+    @app.route('/devices/<did>', methods=['DELETE'])
     def api_delete_device(did):
         allowed, err = check_admin_access(request)
         if not allowed:
@@ -893,6 +913,7 @@ def create_app():
         return jsonify({'success': True})
 
     @app.route('/api/devices/<did>/revoke', methods=['POST'])
+    @app.route('/devices/<did>/revoke', methods=['POST'])
     def api_revoke_device(did):
         allowed, err = check_admin_access(request)
         if not allowed:
@@ -903,6 +924,7 @@ def create_app():
         return jsonify({'success': True, 'device_id': did, 'status': 'revoked'})
 
     @app.route('/api/devices/<did>/history', methods=['GET'])
+    @app.route('/devices/<did>/history', methods=['GET'])
     def api_get_device_history(did):
         limit = request.args.get('limit', 150)
         from_time = request.args.get('from')
@@ -911,6 +933,7 @@ def create_app():
 
     # --- Real Telemetry Endpoint ---
     @app.route('/api/telemetry', methods=['POST'])
+    @app.route('/telemetry', methods=['POST'])
     def api_real_telemetry():
         data = request.get_json(force=True) or {}
         active_fences = db_list_geofences()
@@ -949,6 +972,7 @@ def create_app():
 
     # --- Geofence Events History Endpoint ---
     @app.route('/api/events', methods=['GET'])
+    @app.route('/events', methods=['GET'])
     def api_get_events():
         limit = request.args.get('limit', 50)
         did = request.args.get('device_id')
@@ -989,6 +1013,7 @@ def create_app():
         return jsonify(get_database_status())
 
     @app.route('/api/network/info', methods=['GET'])
+    @app.route('/network/info', methods=['GET'])
     def api_network_info():
         host = request.headers.get('x-forwarded-host') or request.host
         proto = request.headers.get('x-forwarded-proto') or ('https' if os.environ.get('VERCEL') else 'http')
