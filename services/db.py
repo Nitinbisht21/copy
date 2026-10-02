@@ -54,8 +54,14 @@ def init_tracking_db(client=None):
         mongo_client = client
     elif mongo_client is None:
         try:
-            timeout_ms = 12000 if 'mongodb+srv' in MONGODB_URI else 3000
-            mongo_client = pymongo.MongoClient(MONGODB_URI, serverSelectionTimeoutMS=timeout_ms)
+            is_vercel = bool(os.environ.get('VERCEL'))
+            timeout_ms = 2500 if is_vercel else (12000 if 'mongodb+srv' in MONGODB_URI else 3000)
+            mongo_client = pymongo.MongoClient(
+                MONGODB_URI,
+                serverSelectionTimeoutMS=timeout_ms,
+                connectTimeoutMS=timeout_ms,
+                socketTimeoutMS=timeout_ms
+            )
             mongo_client.admin.command('ping')
         except Exception as e:
             use_mongodb = False

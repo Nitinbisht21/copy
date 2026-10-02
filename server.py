@@ -142,20 +142,29 @@ def init_mongo_connection(silent=False):
         except Exception:
             use_mongodb = False
 
-    candidates = [MONGODB_URI]
-    if '://Nitin:' in MONGODB_URI:
-        candidates.append(MONGODB_URI.replace('://Nitin:', '://nitin:'))
-    elif '://nitin:' in MONGODB_URI:
-        candidates.append(MONGODB_URI.replace('://nitin:', '://Nitin:'))
+    is_vercel = bool(os.environ.get('VERCEL'))
+    if is_vercel:
+        candidates = [MONGODB_URI]
+    else:
+        candidates = [MONGODB_URI]
+        if '://Nitin:' in MONGODB_URI:
+            candidates.append(MONGODB_URI.replace('://Nitin:', '://nitin:'))
+        elif '://nitin:' in MONGODB_URI:
+            candidates.append(MONGODB_URI.replace('://nitin:', '://Nitin:'))
 
-    if 'localhost' in MONGODB_URI:
-        candidates.append(MONGODB_URI.replace('localhost', '127.0.0.1'))
+        if 'localhost' in MONGODB_URI:
+            candidates.append(MONGODB_URI.replace('localhost', '127.0.0.1'))
 
     last_error = None
+    timeout_ms = 2500 if is_vercel else (12000 if 'mongodb+srv' in MONGODB_URI else 3000)
     for uri in candidates:
         try:
-            timeout_ms = 12000 if 'mongodb+srv' in uri else 3000
-            client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=timeout_ms)
+            client = pymongo.MongoClient(
+                uri,
+                serverSelectionTimeoutMS=timeout_ms,
+                connectTimeoutMS=timeout_ms,
+                socketTimeoutMS=timeout_ms
+            )
             client.admin.command('ping')
             mongo_client = client
             mongo_simulation_db = client[MONGODB_SIMULATION_DB]
