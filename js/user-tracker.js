@@ -187,6 +187,22 @@
           p.catch(() => {});
         }
       } catch (e) {}
+
+      // Method 3: MediaSession notification for Android & iOS background execution priority
+      try {
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: 'Virtual Fence GPS Tracking Active',
+            artist: 'Background Geofence Engine',
+            album: 'Live Continuous Location Streaming'
+          });
+          navigator.mediaSession.playbackState = 'playing';
+          try {
+            navigator.mediaSession.setActionHandler('play', () => { this.start(); });
+            navigator.mediaSession.setActionHandler('pause', () => {});
+          } catch (e) {}
+        }
+      } catch (e) {}
     }
 
     stop() {
@@ -201,6 +217,11 @@
       if (this.audioCtx) {
         try { this.audioCtx.close(); } catch (e) {}
         this.audioCtx = null;
+      }
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.playbackState = 'paused';
+        } catch (e) {}
       }
     }
   }
@@ -239,6 +260,277 @@
   }
 
   // =========================================================================
+  // PICTURE-IN-PICTURE (PIP) FLOATING MINI-TRACKER ENGINE
+  // Allows continuous GPS tracking over other apps (WhatsApp, Maps, Home screen)
+  // When PiP is open, mobile Chrome and desktop browsers treat the tab as FOREGROUND
+  // so navigator.geolocation.watchPosition is NEVER throttled or suspended!
+  // =========================================================================
+
+  class PipTracker {
+    constructor(tracker) {
+      this.tracker = tracker;
+      this.canvas = null;
+      this.ctx = null;
+      this.video = null;
+      this.stream = null;
+      this.isPipActive = false;
+      this.renderInterval = null;
+      this.btnPip = null;
+      this.pipBadge = null;
+      this.chkAutoPip = null;
+      this.init();
+    }
+
+    isSupported() {
+      return Boolean(document.pictureInPictureEnabled && HTMLVideoElement.prototype.requestPictureInPicture);
+    }
+
+    init() {
+      this.canvas = document.getElementById('pip-canvas');
+      this.video = document.getElementById('pip-video');
+      this.btnPip = document.getElementById('btn-toggle-pip');
+      this.pipBadge = document.getElementById('pip-badge');
+      this.chkAutoPip = document.getElementById('chk-auto-pip');
+
+      if (!this.canvas) {
+        this.canvas = document.createElement('canvas');
+        this.canvas.id = 'pip-canvas';
+        this.canvas.width = 360;
+        this.canvas.height = 200;
+        this.canvas.style.display = 'none';
+        document.body.appendChild(this.canvas);
+      }
+      this.ctx = this.canvas.getContext('2d');
+
+      if (!this.video) {
+        this.video = document.createElement('video');
+        this.video.id = 'pip-video';
+        this.video.muted = true;
+        this.video.playsInline = true;
+        this.video.autoplay = true;
+        this.video.style.display = 'none';
+        document.body.appendChild(this.video);
+      }
+
+      // Restore auto-pip stored preference
+      const storedAutoPip = getStoredValue('vf_auto_pip');
+      if (this.chkAutoPip) {
+        if (storedAutoPip !== null) {
+          this.chkAutoPip.checked = storedAutoPip === 'true';
+        }
+        this.chkAutoPip.addEventListener('change', () => {
+          setStoredValue('vf_auto_pip', this.chkAutoPip.checked ? 'true' : 'false');
+        });
+      }
+
+      // Button toggle listener
+      if (this.btnPip) {
+        if (!this.isSupported()) {
+          this.btnPip.style.opacity = '0.6';
+          this.btnPip.title = 'Picture-in-Picture not supported on this browser version. Keep the tab open to track.';
+        }
+        this.btnPip.addEventListener('click', async (e) => {
+          e.preventDefault();
+          await this.togglePiP();
+        });
+      }
+
+      // Track PiP window lifecycle
+      this.video.addEventListener('enterpictureinpicture', () => {
+        this.isPipActive = true;
+        this.updateUI(true);
+        if (this.tracker && this.tracker.networkStatus) {
+          this.tracker.networkStatus.textContent = 'Floating Mini-Tracker Active • Tracking over other apps';
+        }
+      });
+
+      this.video.addEventListener('leavepictureinpicture', () => {
+        this.isPipActive = false;
+        this.updateUI(false);
+      });
+    }
+
+    renderFrame() {
+      if (!this.ctx) return;
+      const ctx = this.ctx;
+      const w = this.canvas.width;
+      const h = this.canvas.height;
+      const pos = this.tracker.lastPosition;
+      const isTracking = this.tracker.isTracking;
+
+      // Dark background gradient
+      const grad = ctx.createLinearGradient(0, 0, w, h);
+      grad.addColorStop(0, '#0a0e17');
+      grad.addColorStop(1, '#0f172a');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      // Outer accent border
+      ctx.strokeStyle = isTracking ? 'rgba(16, 185, 129, 0.5)' : 'rgba(56, 189, 248, 0.4)';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(1.5, 1.5, w - 3, h - 3);
+
+      // Header Banner
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+      ctx.fillRect(3, 3, w - 6, 34);
+
+      // Pulsing Green/Red Beacon Dot
+      const pulsePhase = (Date.now() % 1600) / 1600;
+      const r = 5 + (isTracking ? Math.sin(pulsePhase * Math.PI) * 2 : 0);
+      ctx.beginPath();
+      ctx.arc(20, 20, Math.max(3, r), 0, 2 * Math.PI);
+      ctx.fillStyle = isTracking ? '#10b981' : '#ef4444';
+      ctx.fill();
+
+      // Header Text
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 12px system-ui, -apple-system, sans-serif';
+      ctx.fillText('VIRTUAL FENCE TRACKER', 34, 24);
+
+      // Device Tag
+      const devName = this.tracker.deviceName || this.tracker.deviceId || 'Phone';
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(devName.slice(0, 16), w - 14, 24);
+      ctx.textAlign = 'left';
+
+      // Coordinates Line
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '10px system-ui, sans-serif';
+      ctx.fillText('GPS COORDINATES', 16, 56);
+
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = 'bold 16px monospace';
+      if (pos && pos.latitude !== undefined) {
+        ctx.fillText(`${pos.latitude.toFixed(5)}°, ${pos.longitude.toFixed(5)}°`, 16, 78);
+      } else {
+        ctx.fillText(isTracking ? 'Acquiring GPS Fix...' : 'Tracking Paused', 16, 78);
+      }
+
+      // Telemetry: Accuracy & Speed
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = '11px system-ui, sans-serif';
+      const accStr = pos && pos.accuracy ? `Acc: ±${pos.accuracy}m` : 'Acc: —';
+      const spdStr = pos && pos.speed !== undefined ? `Speed: ${pos.speed} km/h` : 'Speed: 0 km/h';
+      ctx.fillText(`${accStr}   •   ${spdStr}`, 16, 104);
+
+      // Fence Badge
+      const fenceText = (this.tracker.statGeofence && this.tracker.statGeofence.textContent) || 'Outside Geofences';
+      const isInside = fenceText.includes('Inside');
+      ctx.fillStyle = isInside ? 'rgba(16, 185, 129, 0.18)' : 'rgba(245, 158, 11, 0.18)';
+      ctx.fillRect(16, 118, w - 32, 26);
+      ctx.strokeStyle = isInside ? 'rgba(16, 185, 129, 0.45)' : 'rgba(245, 158, 11, 0.45)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(16, 118, w - 32, 26);
+
+      ctx.fillStyle = isInside ? '#34d399' : '#fbbf24';
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.fillText(fenceText.slice(0, 38), 24, 135);
+
+      // Footer
+      ctx.fillStyle = '#64748b';
+      ctx.font = '10px system-ui, sans-serif';
+      const timeStr = new Date().toLocaleTimeString();
+      ctx.fillText(`Active Over Apps • ${timeStr}`, 16, 180);
+
+      ctx.textAlign = 'right';
+      ctx.fillStyle = isTracking ? '#38bdf8' : '#94a3b8';
+      ctx.fillText(isTracking ? '● LIVE STREAMING' : 'STANDBY', w - 16, 180);
+      ctx.textAlign = 'left';
+    }
+
+    async startStream() {
+      this.renderFrame();
+      if (!this.stream) {
+        try {
+          this.stream = this.canvas.captureStream(5); // 5 fps is battery-efficient and fluid
+          this.video.srcObject = this.stream;
+          await this.video.play();
+        } catch (e) {
+          console.warn('PiP captureStream notice:', e);
+        }
+      }
+      if (!this.renderInterval) {
+        this.renderInterval = setInterval(() => this.renderFrame(), 1000);
+      }
+    }
+
+    async togglePiP() {
+      if (!this.isSupported()) {
+        alert('Floating Picture-in-Picture is not supported in this browser version. Keep the tab open to track.');
+        return false;
+      }
+      try {
+        await this.startStream();
+        if (document.pictureInPictureElement) {
+          await document.exitPictureInPicture();
+          return false;
+        } else {
+          await this.video.requestPictureInPicture();
+          return true;
+        }
+      } catch (err) {
+        console.warn('Toggle PiP notice:', err);
+        return false;
+      }
+    }
+
+    async autoEnableIfRequested() {
+      if (!this.isSupported()) return;
+      const shouldAuto = this.chkAutoPip ? this.chkAutoPip.checked : true;
+      if (shouldAuto && !document.pictureInPictureElement) {
+        try {
+          await this.startStream();
+          await this.video.requestPictureInPicture();
+        } catch (e) {
+          // Browser may require user gesture on first launch
+          console.log('[PiP] Auto-launch notice (gesture needed):', e);
+        }
+      }
+    }
+
+    stop() {
+      if (this.renderInterval) {
+        clearInterval(this.renderInterval);
+        this.renderInterval = null;
+      }
+      if (document.pictureInPictureElement && document.pictureInPictureElement === this.video) {
+        document.exitPictureInPicture().catch(() => {});
+      }
+      this.isPipActive = false;
+      this.updateUI(false);
+    }
+
+    updateUI(isActive) {
+      if (this.btnPip) {
+        if (isActive) {
+          this.btnPip.classList.add('pip-active');
+          this.btnPip.innerHTML = `
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="2" y="2" width="20" height="20" rx="3" fill="none" stroke="currentColor" stroke-width="2"/>
+              <rect x="11" y="11" width="9" height="7" rx="1.5"/>
+            </svg>
+            <span id="btn-pip-text">Floating Mini-Tracker Active (Over Other Apps)</span>
+          `;
+        } else {
+          this.btnPip.classList.remove('pip-active');
+          this.btnPip.innerHTML = `
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2" width="20" height="20" rx="3"/>
+              <rect x="11" y="11" width="9" height="7" rx="1.5" fill="currentColor"/>
+            </svg>
+            <span id="btn-pip-text">📌 Floating Mini-Tracker (Works Over Other Apps)</span>
+          `;
+        }
+      }
+      if (this.pipBadge) {
+        this.pipBadge.style.display = isActive ? 'inline-block' : 'none';
+      }
+    }
+  }
+
+  // =========================================================================
   // MAIN USER TRACKER CLIENT
   // =========================================================================
 
@@ -271,10 +563,12 @@
       this.isOfflineDueToFence = false;
       this.offlineQueue = [];
       this.isSending = false;
+      this.forceImmediateSync = false;
 
       // Background helpers
       this.audioKeeper = new BackgroundAudioKeeper();
       this.worker = createBackgroundWorker(() => this.handleBackgroundHeartbeat());
+      this.pipTracker = new PipTracker(this);
 
       this.initElements();
       this.bindEvents();
@@ -325,11 +619,15 @@
     }
 
     bindEvents() {
-      this.btnToggleTrack.addEventListener('click', () => {
+      this.btnToggleTrack.addEventListener('click', async () => {
         if (this.isTracking) {
           this.stopTracking();
         } else {
           this.startTracking(false);
+          // If auto-pip is enabled, request Picture-in-Picture inside this direct user gesture!
+          if (this.pipTracker) {
+            await this.pipTracker.autoEnableIfRequested();
+          }
         }
       });
 
@@ -372,7 +670,8 @@
           if (this.isTracking) {
             await this.requestWakeLock();
             this.audioKeeper.start();
-            // Request an immediate location update to refresh screen smoothly
+            // Flag immediate sync so the catch-up fix transmits to server right away!
+            this.forceImmediateSync = true;
             if (navigator.geolocation) {
               try {
                 navigator.geolocation.getCurrentPosition(
@@ -391,13 +690,35 @@
         }
       });
 
-      // Page Lifecycle resumption (mobile screen wake / unfreeze)
-      window.addEventListener('pageshow', async () => {
+      // Page Lifecycle resumption (mobile screen wake / unfreeze / window focus)
+      const onWakeOrFocus = async () => {
         if (this.isTracking || this.wasTrackingActive) {
           await this.requestWakeLock();
           this.audioKeeper.start();
+          if (this.isTracking && navigator.geolocation) {
+            this.forceImmediateSync = true;
+            try {
+              navigator.geolocation.getCurrentPosition(
+                (pos) => this.handlePosition(pos),
+                () => {},
+                { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+              );
+            } catch (e) {}
+          }
         }
-      });
+      };
+
+      window.addEventListener('pageshow', onWakeOrFocus);
+      window.addEventListener('focus', onWakeOrFocus);
+
+      // Re-acquire Screen Wake Lock on user touch/click
+      const reacquireWakeLock = () => {
+        if (this.isTracking && !this.wakeLock) {
+          this.requestWakeLock();
+        }
+      };
+      document.addEventListener('touchstart', reacquireWakeLock, { passive: true });
+      document.addEventListener('click', reacquireWakeLock, { passive: true });
 
       // Update "Last updated X seconds ago" counter every second
       setInterval(() => this.updateSyncElapsed(), 1000);
@@ -556,9 +877,10 @@
       // Request Screen Wake Lock so screen does not lock and throttle GPS
       await this.requestWakeLock();
 
-      // Start Background Audio Keeper & Background Worker
+      // Start Background Audio Keeper, Background Worker & PiP Stream
       this.audioKeeper.start();
       if (this.worker) this.worker.postMessage('start');
+      if (this.pipTracker) this.pipTracker.startStream();
 
       const options = {
         enableHighAccuracy: true,
@@ -601,6 +923,7 @@
       this.releaseWakeLock();
       this.audioKeeper.stop();
       if (this.worker) this.worker.postMessage('stop');
+      if (this.pipTracker) this.pipTracker.stop();
 
       this.updateUIState('stopped');
       this.networkStatus.textContent = 'Tracking Stopped';
@@ -643,17 +966,20 @@
             navigator.geolocation.getCurrentPosition(
               (pos) => this.handlePosition(pos),
               () => {},
-              { enableHighAccuracy: true, maximumAge: 10000, timeout: 10000 }
+              { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
             );
           } catch (e) {}
         }
       }
 
-      // 2. Heartbeat ping: If no telemetry has been sent in > 25 seconds, send a ping to keep device ONLINE on server
+      // 2. Check 2-minute database cadence while hidden: If 2 minutes elapsed, send current coordinates
       const timeSinceTelemetry = now - this.lastTelemetrySendTime;
       const timeSincePing = now - this.lastPingSendTime;
 
-      if (this.deviceId && timeSinceTelemetry > 25000 && timeSincePing > 25000) {
+      if (this.lastPosition && this.lastPosition.latitude && timeSinceTelemetry >= TELEMETRY_INTERVAL_MS) {
+        await this.sendTelemetry(this.lastPosition);
+      } else if (this.deviceId && timeSinceTelemetry > 25000 && timeSincePing > 25000) {
+        // 3. Heartbeat ping: Keep device ONLINE on server
         this.lastPingSendTime = now;
         try {
           await fetch(API.PING(this.deviceId), {
@@ -667,7 +993,7 @@
         } catch (e) {}
       }
 
-      // 3. Flush offline queue if any
+      // 4. Flush offline queue if any
       if (this.offlineQueue.length > 0 && navigator.onLine) {
         this.flushOfflineQueue();
       }
@@ -702,10 +1028,13 @@
         this.updateUIState('active');
       }
 
-      // Throttle database footprint transmissions to every 2 minutes (send first fix immediately)
+      // Throttle database footprint transmissions to every 2 minutes (send first fix immediately or on catch-up unhide)
       const now = Date.now();
-      const shouldSend = (this.lastTelemetrySendTime === 0) || ((now - this.lastTelemetrySendTime) >= TELEMETRY_INTERVAL_MS);
+      const shouldSend = this.forceImmediateSync ||
+                         (this.lastTelemetrySendTime === 0) ||
+                         ((now - this.lastTelemetrySendTime) >= TELEMETRY_INTERVAL_MS);
       if (shouldSend) {
+        this.forceImmediateSync = false;
         this.sendTelemetry(this.lastPosition);
       }
     }
@@ -751,6 +1080,11 @@
         const speedStr = `${pos.speed} km/h`;
         const headingStr = pos.heading ? ` (${pos.heading}°)` : '';
         this.statSpeed.textContent = speedStr + headingStr;
+      }
+
+      // Trigger live PiP canvas HUD redraw
+      if (this.pipTracker && typeof this.pipTracker.renderFrame === 'function') {
+        this.pipTracker.renderFrame();
       }
     }
 

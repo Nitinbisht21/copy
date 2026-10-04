@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Mobile GPS Tracker | Virtual Fence Client</title>
   <meta name="description" content="Lightweight real-time browser GPS tracking companion for Virtual Fence. Transmits live location securely to the geofence monitoring engine.">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0a0e17">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="VF Tracker">
 
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -215,6 +220,76 @@
     .btn-track.loading {
       opacity: 0.75;
       pointer-events: none;
+    }
+
+    /* Picture-in-Picture Floating Mini-Tracker */
+    .pip-control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .btn-pip {
+      width: 100%;
+      padding: 0.85rem 1rem;
+      font-family: var(--font-sans);
+      font-size: 0.92rem;
+      font-weight: 600;
+      border-radius: 14px;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      background: rgba(15, 23, 42, 0.75);
+      color: #38bdf8;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.6rem;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    }
+
+    .btn-pip:hover {
+      background: rgba(56, 189, 248, 0.12);
+      border-color: rgba(56, 189, 248, 0.7);
+      box-shadow: 0 0 16px rgba(56, 189, 248, 0.25);
+    }
+
+    .btn-pip:active {
+      transform: scale(0.98);
+    }
+
+    .btn-pip.pip-active {
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.25), rgba(6, 95, 70, 0.45));
+      border-color: #10b981;
+      color: #34d399;
+      box-shadow: 0 0 16px rgba(16, 185, 129, 0.35);
+    }
+
+    .pip-toggle-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.6rem 0.9rem;
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid rgba(51, 65, 85, 0.45);
+      border-radius: 10px;
+      font-size: 0.78rem;
+      color: #94a3b8;
+      cursor: pointer;
+      user-select: none;
+      transition: border-color 0.2s;
+    }
+
+    .pip-toggle-wrap:hover {
+      border-color: rgba(56, 189, 248, 0.35);
+    }
+
+    .pip-toggle-wrap input[type="checkbox"] {
+      accent-color: #3b82f6;
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
     }
 
     /* Coordinate & Telemetry Grid */
@@ -502,6 +577,7 @@
           </div>
         </div>
         <div style="display: flex; gap: 0.35rem; align-items: center;">
+          <span id="pip-badge" class="device-tag" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border-color: rgba(56, 189, 248, 0.35); display: none;">PiP ON</span>
           <span id="bg-badge" class="device-tag" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: rgba(16, 185, 129, 0.35); display: none;">BG ON</span>
           <div id="device-badge" class="device-tag">NO DEVICE</div>
         </div>
@@ -514,6 +590,28 @@
         </svg>
         <span id="btn-track-text">Start GPS Tracking</span>
       </button>
+
+      <!-- Floating Mini-Tracker (Picture-in-Picture) Controls -->
+      <div class="pip-control-group">
+        <button type="button" id="btn-toggle-pip" class="btn-pip" title="Open floating mini-window so GPS never stops when using WhatsApp or other apps">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2" width="20" height="20" rx="3"></rect>
+            <rect x="11" y="11" width="9" height="7" rx="1.5" fill="currentColor"></rect>
+          </svg>
+          <span id="btn-pip-text">📌 Floating Mini-Tracker (Works Over Other Apps)</span>
+        </button>
+
+        <label class="pip-toggle-wrap" for="chk-auto-pip">
+          <span style="display: flex; align-items: center; gap: 0.4rem;">
+            <span>🔄</span> Auto-open Floating Tracker on Start (Over Other Apps)
+          </span>
+          <input type="checkbox" id="chk-auto-pip" checked>
+        </label>
+      </div>
+
+      <!-- Hidden Canvas & Video for Picture-in-Picture Streaming -->
+      <canvas id="pip-canvas" width="360" height="200" style="display: none;"></canvas>
+      <video id="pip-video" style="display: none;" playsinline muted autoplay></video>
 
       <!-- Real-time Telemetry Grid -->
       <section class="telemetry-grid" aria-label="Real-time Telemetry">
@@ -588,13 +686,28 @@
         </div>
       </section>
 
-      <!-- Background Tracking & Session Memory Notice -->
-      <div class="notice-card" id="background-notice-card" style="display: flex; align-items: flex-start; gap: 0.65rem;">
-        <span class="notice-icon">⚡</span>
-        <div>
-          <strong id="notice-title">Background Tracking & Session Memory Active:</strong>
-          <div id="notice-desc" style="font-size: 0.78rem; color: #cbd5e1; margin-top: 0.2rem; line-height: 1.4;">
-            Audio Keep-Alive and Web Worker Heartbeat are running. Location continues streaming when minimized or locked. If you refresh, tracking auto-resumes at your current position.
+      <!-- Background Tracking & Floating Mini-Tracker Guide -->
+      <div class="notice-card" id="background-notice-card" style="display: flex; flex-direction: column; gap: 0.5rem;">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <span class="notice-icon" style="font-size: 1.1rem;">💡</span>
+          <strong id="notice-title" style="color: #f1f5f9; font-size: 0.85rem;">Mobile Background Tracking Guide:</strong>
+        </div>
+        <div id="notice-desc" style="font-size: 0.76rem; color: #cbd5e1; line-height: 1.5; display: flex; flex-direction: column; gap: 0.35rem;">
+          <div>
+            <span style="color: #38bdf8; font-weight: 600;">1. Floating Mini-Tracker (Recommended):</span>
+            Tap the button above to pop out a floating HUD. As long as it floats in the corner of your phone screen, Android keeps GPS tracking alive while you use WhatsApp, Maps, or other apps!
+          </div>
+          <div>
+            <span style="color: #10b981; font-weight: 600;">2. Screen Wake Lock:</span>
+            Automatically active while tracking to keep your screen awake and prevent phone sleep.
+          </div>
+          <div>
+            <span style="color: #f59e0b; font-weight: 600;">3. Instant Catch-up:</span>
+            If you minimize or lock, the moment you unlock or switch back, fresh GPS is instantly captured and synced with the server.
+          </div>
+          <div>
+            <span style="color: #a78bfa; font-weight: 600;">4. Install as App (PWA):</span>
+            Tap browser menu <strong>⋮</strong> &rarr; <strong>"Add to Home screen"</strong> or <strong>"Install App"</strong> to run in standalone high-priority mode.
           </div>
         </div>
       </div>
@@ -634,6 +747,17 @@
       </form>
     </div>
   </div>
+
+  <!-- Service Worker Registration for PWA Standalone Mode -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch((err) => {
+          console.warn('[SW Registration Notice]', err);
+        });
+      });
+    }
+  </script>
 
   <!-- Client Tracking Engine Script -->
   <script src="js/user-tracker.js"></script>

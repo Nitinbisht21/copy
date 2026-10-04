@@ -708,7 +708,7 @@ def mask_mongodb_uri(uri: str) -> str:
 # internal logs, scripts, and sensitive directories.
 # -----------------------------------------------------------------------------
 ALLOWED_STATIC_PREFIXES = ('css/', 'js/', 'vendor/')
-ALLOWED_ROOT_FILES = {'index.html', 'track.html', 'favicon.ico', 'robots.txt'}
+ALLOWED_ROOT_FILES = {'index.html', 'track.html', 'favicon.ico', 'robots.txt', 'manifest.json', 'sw.js'}
 BLOCKED_EXTENSIONS = (
     '.py', '.pyc', '.pyd', '.pyo', '.env', '.db', '.sqlite', '.sqlite3',
     '.log', '.bat', '.cmd', '.ps1', '.sh', '.md', '.txt', '.json',
@@ -731,15 +731,15 @@ def is_safe_static_request(req_path: str) -> bool:
         if segment.startswith('.'):
             return False
 
+    # Allow exact root files (e.g. index.html, manifest.json, sw.js)
+    if clean_path in ALLOWED_ROOT_FILES:
+        return True
+
     # Block all sensitive extensions
     lower_path = clean_path.lower()
     for ext in BLOCKED_EXTENSIONS:
         if lower_path.endswith(ext):
             return False
-
-    # Allow exact root files
-    if clean_path in ALLOWED_ROOT_FILES:
-        return True
 
     # Allow approved asset subdirectories (css/, js/, vendor/)
     for prefix in ALLOWED_STATIC_PREFIXES:
@@ -1166,6 +1166,10 @@ def create_app():
             return send_from_directory(STATIC_DIR, 'track.html')
         if clean_p in ('admin', 'index.html'):
             return send_from_directory(STATIC_DIR, 'index.html')
+        if clean_p == 'manifest.json':
+            return send_from_directory(STATIC_DIR, 'manifest.json', mimetype='application/manifest+json')
+        if clean_p == 'sw.js':
+            return send_from_directory(STATIC_DIR, 'sw.js', mimetype='application/javascript')
         if not is_safe_static_request(clean_p):
             return jsonify({'error': 'Access denied: Source code and internal configuration files are protected.'}), 403
         return send_from_directory(STATIC_DIR, clean_p)

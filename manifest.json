@@ -1,0 +1,18 @@
+{
+  "name": "Virtual Fence GPS Tracker",
+  "short_name": "VF Tracker",
+  "start_url": "/track",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0e17",
+  "theme_color": "#0a0e17",
+  "description": "Real-time field GPS tracker client with continuous background tracking and geofence monitoring.",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}
