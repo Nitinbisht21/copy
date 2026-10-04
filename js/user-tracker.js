@@ -1,8 +1,12 @@
 /**
  * Mobile GPS Tracker Client Engine
  * Transmits real-time HTML5 Geolocation API telemetry to the Flask backend
- * Supports Screen Wake Lock, GPS accuracy estimation, hardware/browser fingerprinting,
- * multi-storage persistence, and automatic reconnect memory.
+ * Features:
+ *   - Continuous background tracking via Screen Wake Lock, Web Worker heartbeat, and Audio keep-alive
+ *   - Persistent session memory: Auto-resumes tracking upon page refresh
+ *   - Instant location restoration: Coordinates and stats appear immediately without blank screens
+ *   - Periodic heartbeat pings to ensure device never drops to offline on the Admin Panel
+ *   - Multi-tier storage persistence and multi-device slot support (?device=2, ?slot=2)
  */
 
 (function () {
@@ -21,13 +25,18 @@
     CLIENT_UUID: `vf_client_uuid${slotSuffix}`,
     AUTH_TOKEN: `vf_auth_token${slotSuffix}`,
     USER_ID: 'vf_user_id',
-    FINGERPRINT: 'vf_device_fingerprint'
+    FINGERPRINT: 'vf_device_fingerprint',
+    TRACKING_ACTIVE: `vf_tracking_active${slotSuffix}`,
+    LAST_POSITION: `vf_last_position${slotSuffix}`,
+    LAST_GEOFENCE: `vf_last_geofence${slotSuffix}`,
+    LAST_SYNC_TIME: `vf_last_sync_time${slotSuffix}`
   };
 
   const API = {
     REGISTER_DEVICE: '/api/devices/register',
     TELEMETRY: '/api/telemetry',
-    DEVICE: (id) => `/api/devices/${id}`
+    DEVICE: (id) => `/api/devices/${id}`,
+    PING: (id) => `/api/devices/${id}/ping`
   };
 
   const TELEMETRY_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes (120,000 ms) data footprint interval
@@ -127,6 +136,112 @@
     }
   }
 
+  // =========================================================================
+  // BACKGROUND HELPERS: AUDIO KEEP-ALIVE & WEB WORKER HEARTBEAT
+  // =========================================================================
+
+  class BackgroundAudioKeeper {
+    constructor() {
+      this.audio = null;
+      this.audioCtx = null;
+      this.audioSource = null;
+      this.isActive = false;
+    }
+
+    start() {
+      if (this.isActive) return;
+      this.isActive = true;
+
+      // Method 1: Web Audio API silent looping buffer
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          if (!this.audioCtx || this.audioCtx.state === 'closed') {
+            this.audioCtx = new AudioCtx();
+          }
+          if (this.audioCtx.state === 'suspended') {
+            this.audioCtx.resume();
+          }
+          const buffer = this.audioCtx.createBuffer(1, this.audioCtx.sampleRate, this.audioCtx.sampleRate);
+          const source = this.audioCtx.createBufferSource();
+          source.buffer = buffer;
+          source.loop = true;
+          source.connect(this.audioCtx.destination);
+          source.start(0);
+          this.audioSource = source;
+        }
+      } catch (e) {
+        console.warn('Web Audio keeper note:', e);
+      }
+
+      // Method 2: HTML5 Audio with 1-second silent WAV loop (high compatibility with mobile lock screens)
+      try {
+        if (!this.audio) {
+          const silentWav = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+          this.audio = new Audio(silentWav);
+          this.audio.loop = true;
+          this.audio.volume = 0.01;
+        }
+        const p = this.audio.play();
+        if (p && typeof p.catch === 'function') {
+          p.catch(() => {});
+        }
+      } catch (e) {}
+    }
+
+    stop() {
+      this.isActive = false;
+      if (this.audio) {
+        try { this.audio.pause(); } catch (e) {}
+      }
+      if (this.audioSource) {
+        try { this.audioSource.stop(); } catch (e) {}
+        this.audioSource = null;
+      }
+      if (this.audioCtx) {
+        try { this.audioCtx.close(); } catch (e) {}
+        this.audioCtx = null;
+      }
+    }
+  }
+
+  function createBackgroundWorker(onTick) {
+    try {
+      const code = `
+        var timer = null;
+        self.onmessage = function(e) {
+          if (e.data === 'start') {
+            if (!timer) {
+              timer = setInterval(function() {
+                self.postMessage('tick');
+              }, 15000); // tick every 15 seconds
+            }
+          } else if (e.data === 'stop') {
+            if (timer) {
+              clearInterval(timer);
+              timer = null;
+            }
+          }
+        };
+      `;
+      const blob = new Blob([code], { type: 'application/javascript' });
+      const worker = new Worker(URL.createObjectURL(blob));
+      worker.onmessage = function(e) {
+        if (e.data === 'tick' && typeof onTick === 'function') {
+          onTick();
+        }
+      };
+      return worker;
+    } catch (err) {
+      console.warn('Worker keeper fallback:', err);
+      return null;
+    }
+  }
+
+  // =========================================================================
+  // MAIN USER TRACKER CLIENT
+  // =========================================================================
+
   class UserTracker {
     constructor() {
       this.clientUuid = getOrCreateClientUuid(STORAGE_KEYS.CLIENT_UUID);
@@ -136,19 +251,48 @@
       this.token = getStoredValue(STORAGE_KEYS.AUTH_TOKEN) || null;
       this.userId = getStoredValue(STORAGE_KEYS.USER_ID) || 'anon_user';
 
+      // Read restored tracking state & cached position across page refreshes
+      this.wasTrackingActive = !isForcedNew && (getStoredValue(STORAGE_KEYS.TRACKING_ACTIVE) === 'true');
       this.isTracking = false;
       this.watchId = null;
       this.wakeLock = null;
-      this.lastPosition = null;
-      this.lastSyncTime = null;
+
+      // Restore last known position immediately so screen is NEVER blank on refresh!
+      let cachedPos = null;
+      try {
+        const rawPos = getStoredValue(STORAGE_KEYS.LAST_POSITION);
+        if (rawPos) cachedPos = JSON.parse(rawPos);
+      } catch (e) {}
+
+      this.lastPosition = cachedPos;
+      this.lastSyncTime = Number(getStoredValue(STORAGE_KEYS.LAST_SYNC_TIME)) || null;
       this.lastTelemetrySendTime = 0;
+      this.lastPingSendTime = 0;
       this.isOfflineDueToFence = false;
-      this.syncTimer = null;
       this.offlineQueue = [];
       this.isSending = false;
 
+      // Background helpers
+      this.audioKeeper = new BackgroundAudioKeeper();
+      this.worker = createBackgroundWorker(() => this.handleBackgroundHeartbeat());
+
       this.initElements();
       this.bindEvents();
+
+      // Display cached position immediately on DOM load!
+      if (this.lastPosition) {
+        this.updateTelemetryDisplay(this.lastPosition);
+        const cachedFence = getStoredValue(STORAGE_KEYS.LAST_GEOFENCE);
+        if (cachedFence && this.statGeofence) {
+          this.statGeofence.textContent = cachedFence;
+        }
+        if (this.networkStatus) {
+          this.networkStatus.textContent = this.wasTrackingActive
+            ? 'Session Restored • Resuming GPS tracking...'
+            : 'Last Known Location Restored';
+        }
+      }
+
       this.initDevice();
     }
 
@@ -157,6 +301,7 @@
       this.statusLabel = document.getElementById('status-label');
       this.networkStatus = document.getElementById('network-status');
       this.deviceBadge = document.getElementById('device-badge');
+      this.bgBadge = document.getElementById('bg-badge');
       this.btnToggleTrack = document.getElementById('btn-toggle-track');
       this.btnTrackIcon = document.getElementById('btn-track-icon');
       this.btnTrackText = document.getElementById('btn-track-text');
@@ -184,7 +329,7 @@
         if (this.isTracking) {
           this.stopTracking();
         } else {
-          this.startTracking();
+          this.startTracking(false);
         }
       });
 
@@ -221,10 +366,36 @@
         this.networkStatus.textContent = 'Network Offline (Buffering GPS)';
       });
 
-      // Re-acquire Screen Wake Lock when browser tab becomes visible again
+      // Handle Page Visibility Change (Minimizing/Restoring browser tab)
       document.addEventListener('visibilitychange', async () => {
-        if (document.visibilityState === 'visible' && this.isTracking) {
+        if (document.visibilityState === 'visible') {
+          if (this.isTracking) {
+            await this.requestWakeLock();
+            this.audioKeeper.start();
+            // Request an immediate location update to refresh screen smoothly
+            if (navigator.geolocation) {
+              try {
+                navigator.geolocation.getCurrentPosition(
+                  (pos) => this.handlePosition(pos),
+                  () => {},
+                  { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+                );
+              } catch (e) {}
+            }
+          }
+        } else {
+          // Tab is minimized or hidden: ensure audio keeper is running to prevent OS sleep
+          if (this.isTracking) {
+            this.audioKeeper.start();
+          }
+        }
+      });
+
+      // Page Lifecycle resumption (mobile screen wake / unfreeze)
+      window.addEventListener('pageshow', async () => {
+        if (this.isTracking || this.wasTrackingActive) {
           await this.requestWakeLock();
+          this.audioKeeper.start();
         }
       });
 
@@ -238,8 +409,12 @@
       setStoredValue(STORAGE_KEYS.CLIENT_UUID, this.clientUuid);
       setStoredValue(STORAGE_KEYS.DEVICE_ID, null);
       setStoredValue(STORAGE_KEYS.DEVICE_NAME, null);
+      setStoredValue(STORAGE_KEYS.TRACKING_ACTIVE, 'false');
+      setStoredValue(STORAGE_KEYS.LAST_POSITION, null);
       this.deviceId = null;
       this.deviceName = null;
+      this.lastPosition = null;
+      this.wasTrackingActive = false;
 
       if (this.deviceBadge) this.deviceBadge.textContent = 'CONNECTING...';
       if (this.userDisplayName) this.userDisplayName.textContent = 'Connecting...';
@@ -265,6 +440,12 @@
       if (this.userDisplayName) this.userDisplayName.textContent = this.deviceName || 'Connecting...';
       if (this.inputDeviceName) this.inputDeviceName.value = this.deviceName || '';
       if (this.inputDeviceId) this.inputDeviceId.value = this.deviceId || '';
+
+      // If tracking was active before page refresh, auto-resume tracking seamlessly!
+      if (this.wasTrackingActive) {
+        console.log('[UserTracker] Auto-resuming GPS tracking from previous session...');
+        this.startTracking(true);
+      }
     }
 
     async registerDeviceOnBackend(name, customId = null) {
@@ -296,8 +477,28 @@
           if (this.inputDeviceName) this.inputDeviceName.value = this.deviceName;
           if (this.inputDeviceId) this.inputDeviceId.value = this.deviceId;
 
+          // If local cache had no coordinates, but server has last_location, restore it immediately!
+          if (device.last_location && (!this.lastPosition || !this.lastPosition.latitude)) {
+            this.lastPosition = {
+              device_id: this.deviceId,
+              device_name: this.deviceName,
+              client_uuid: this.clientUuid,
+              latitude: Number(device.last_location.latitude),
+              longitude: Number(device.last_location.longitude),
+              accuracy: Number(device.last_location.accuracy || 10),
+              speed: Number(device.last_location.speed || 0),
+              heading: Number(device.last_location.heading || 0),
+              timestamp: device.last_location.timestamp || new Date().toISOString()
+            };
+            setStoredValue(STORAGE_KEYS.LAST_POSITION, JSON.stringify(this.lastPosition));
+            this.updateTelemetryDisplay(this.lastPosition);
+            if (device.current_fence && this.statGeofence) {
+              this.statGeofence.textContent = device.current_fence;
+            }
+          }
+
           this.closeDeviceModal();
-          this.networkStatus.textContent = device.reconnected ? 'Device Reconnected (Identity Preserved)' : 'Device Connected & Ready';
+          this.networkStatus.textContent = device.reconnected ? 'Device Reconnected (Session Preserved)' : 'Device Connected & Ready';
         } else {
           const err = await res.json();
           console.warn('Registration notice:', err.error);
@@ -305,7 +506,7 @@
       } catch (err) {
         // Fallback for offline initialization
         if (!this.deviceId) {
-          this.deviceId = customId || `DEV_${this.fingerprint.slice(3, 9).toUpperCase()}`;
+          this.deviceId = customId || `DEV_${this.clientUuid.slice(4, 10).toUpperCase()}`;
           this.deviceName = name || 'Device 1';
           setStoredValue(STORAGE_KEYS.DEVICE_ID, this.deviceId);
           setStoredValue(STORAGE_KEYS.DEVICE_NAME, this.deviceName);
@@ -327,29 +528,56 @@
     }
 
     // =========================================================================
-    // GPS WATCHER & SCREEN WAKE LOCK
+    // GPS WATCHER & SCREEN WAKE LOCK & BACKGROUND WORKER
     // =========================================================================
 
-    async startTracking() {
+    async startTracking(isAutoResume = false) {
       if (!navigator.geolocation) {
         alert('Geolocation is not supported by your mobile browser.');
         return;
       }
 
       this.isTracking = true;
+      setStoredValue(STORAGE_KEYS.TRACKING_ACTIVE, 'true');
       this.lastTelemetrySendTime = 0;
       this.isOfflineDueToFence = false;
-      this.updateUIState('seeking');
-      this.networkStatus.textContent = 'Acquiring GPS Fix...';
+
+      // If we already have a restored position, show active status smoothly without jarring reset
+      if (this.lastPosition && this.lastPosition.latitude) {
+        this.updateUIState('active');
+        this.networkStatus.textContent = isAutoResume
+          ? 'Tracking Active (Restored) • Updating GPS...'
+          : 'Tracking Active • Updating GPS...';
+      } else {
+        this.updateUIState('seeking');
+        this.networkStatus.textContent = 'Acquiring GPS Fix...';
+      }
 
       // Request Screen Wake Lock so screen does not lock and throttle GPS
       await this.requestWakeLock();
+
+      // Start Background Audio Keeper & Background Worker
+      this.audioKeeper.start();
+      if (this.worker) this.worker.postMessage('start');
 
       const options = {
         enableHighAccuracy: true,
         maximumAge: 0, // Force fresh real-time satellite reading, bypass stale browser cache
         timeout: 20000
       };
+
+      // Trigger immediate one-shot satellite fix
+      try {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => this.handlePosition(pos),
+          (err) => {},
+          options
+        );
+      } catch (e) {}
+
+      if (this.watchId !== null) {
+        navigator.geolocation.clearWatch(this.watchId);
+      }
 
       this.watchId = navigator.geolocation.watchPosition(
         (pos) => this.handlePosition(pos),
@@ -360,13 +588,20 @@
 
     stopTracking() {
       this.isTracking = false;
+      this.wasTrackingActive = false;
+      setStoredValue(STORAGE_KEYS.TRACKING_ACTIVE, 'false');
       this.lastTelemetrySendTime = 0;
       this.isOfflineDueToFence = false;
+
       if (this.watchId !== null) {
         navigator.geolocation.clearWatch(this.watchId);
         this.watchId = null;
       }
+
       this.releaseWakeLock();
+      this.audioKeeper.stop();
+      if (this.worker) this.worker.postMessage('stop');
+
       this.updateUIState('stopped');
       this.networkStatus.textContent = 'Tracking Stopped';
       if (this.statSyncCountdown) {
@@ -394,6 +629,50 @@
       }
     }
 
+    // Background worker heartbeat called every 15s to keep device alive
+    async handleBackgroundHeartbeat() {
+      if (!this.isTracking) return;
+
+      const now = Date.now();
+
+      // 1. If tab is in background, re-assert audio keep-alive and request current position
+      if (document.visibilityState === 'hidden') {
+        this.audioKeeper.start();
+        if (navigator.geolocation) {
+          try {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => this.handlePosition(pos),
+              () => {},
+              { enableHighAccuracy: true, maximumAge: 10000, timeout: 10000 }
+            );
+          } catch (e) {}
+        }
+      }
+
+      // 2. Heartbeat ping: If no telemetry has been sent in > 25 seconds, send a ping to keep device ONLINE on server
+      const timeSinceTelemetry = now - this.lastTelemetrySendTime;
+      const timeSincePing = now - this.lastPingSendTime;
+
+      if (this.deviceId && timeSinceTelemetry > 25000 && timeSincePing > 25000) {
+        this.lastPingSendTime = now;
+        try {
+          await fetch(API.PING(this.deviceId), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client_uuid: this.clientUuid,
+              status: 'online'
+            })
+          });
+        } catch (e) {}
+      }
+
+      // 3. Flush offline queue if any
+      if (this.offlineQueue.length > 0 && navigator.onLine) {
+        this.flushOfflineQueue();
+      }
+    }
+
     handlePosition(position) {
       if (!this.isTracking) return;
 
@@ -413,6 +692,9 @@
         heading: heading ? Math.round(heading) : 0,
         timestamp
       };
+
+      // Persist in localStorage so if the user refreshes, it displays immediately!
+      setStoredValue(STORAGE_KEYS.LAST_POSITION, JSON.stringify(this.lastPosition));
 
       // Always update local device display smoothly in real-time
       this.updateTelemetryDisplay(this.lastPosition);
@@ -446,25 +728,30 @@
     }
 
     updateTelemetryDisplay(pos) {
-      this.statLat.textContent = `${pos.latitude}°`;
-      this.statLng.textContent = `${pos.longitude}°`;
+      if (!pos) return;
+      if (this.statLat && pos.latitude !== undefined) this.statLat.textContent = `${pos.latitude}°`;
+      if (this.statLng && pos.longitude !== undefined) this.statLng.textContent = `${pos.longitude}°`;
 
       // GPS Accuracy formatting with color rating
-      const acc = pos.accuracy;
-      this.statAccuracy.textContent = `±${acc} m`;
-      this.statAccuracy.className = 'stat-val';
-      if (acc <= 10) {
-        this.statAccuracy.classList.add('acc-good');
-      } else if (acc <= 25) {
-        this.statAccuracy.classList.add('acc-med');
-      } else {
-        this.statAccuracy.classList.add('acc-poor');
+      if (this.statAccuracy && pos.accuracy !== undefined) {
+        const acc = pos.accuracy;
+        this.statAccuracy.textContent = `±${acc} m`;
+        this.statAccuracy.className = 'stat-val';
+        if (acc <= 10) {
+          this.statAccuracy.classList.add('acc-good');
+        } else if (acc <= 25) {
+          this.statAccuracy.classList.add('acc-med');
+        } else {
+          this.statAccuracy.classList.add('acc-poor');
+        }
       }
 
       // Speed & Heading
-      const speedStr = `${pos.speed} km/h`;
-      const headingStr = pos.heading ? ` (${pos.heading}°)` : '';
-      this.statSpeed.textContent = speedStr + headingStr;
+      if (this.statSpeed && pos.speed !== undefined) {
+        const speedStr = `${pos.speed} km/h`;
+        const headingStr = pos.heading ? ` (${pos.heading}°)` : '';
+        this.statSpeed.textContent = speedStr + headingStr;
+      }
     }
 
     async sendTelemetry(data) {
@@ -487,6 +774,7 @@
         if (res.ok) {
           const body = await res.json();
           this.lastSyncTime = Date.now();
+          setStoredValue(STORAGE_KEYS.LAST_SYNC_TIME, String(this.lastSyncTime));
 
           // Sync returned device_id and device_name if backend updated or assigned them
           if (body.device_id && body.device_id !== this.deviceId) {
@@ -521,6 +809,10 @@
               this.statGeofence.style.color = '#f59e0b';
             }
             this.networkStatus.textContent = 'Active Always • Transmitting Footprints (Every 2 min)';
+          }
+
+          if (this.statGeofence) {
+            setStoredValue(STORAGE_KEYS.LAST_GEOFENCE, this.statGeofence.textContent);
           }
 
           // Trigger tactile vibration if fence boundary crossed
@@ -619,6 +911,10 @@
     }
 
     updateUIState(state) {
+      if (this.bgBadge) {
+        this.bgBadge.style.display = (state === 'active' || state === 'seeking' || state === 'fence-offline') ? 'inline-block' : 'none';
+      }
+
       if (state === 'fence-offline') {
         this.statusPulse.className = 'pulse-dot offline';
         this.statusLabel.textContent = 'Device Offline (>100m Outside Fence)';

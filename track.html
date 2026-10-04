@@ -501,7 +501,10 @@
             <div id="network-status" style="font-size: 0.72rem; color: var(--text-muted);">Ready to connect</div>
           </div>
         </div>
-        <div id="device-badge" class="device-tag">NO DEVICE</div>
+        <div style="display: flex; gap: 0.35rem; align-items: center;">
+          <span id="bg-badge" class="device-tag" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: rgba(16, 185, 129, 0.35); display: none;">BG ON</span>
+          <div id="device-badge" class="device-tag">NO DEVICE</div>
+        </div>
       </div>
 
       <!-- Start/Stop Primary Button -->
@@ -585,11 +588,14 @@
         </div>
       </section>
 
-      <!-- Battery & Background Tracking Advice -->
-      <div class="notice-card">
-        <span class="notice-icon">💡</span>
+      <!-- Background Tracking & Session Memory Notice -->
+      <div class="notice-card" id="background-notice-card" style="display: flex; align-items: flex-start; gap: 0.65rem;">
+        <span class="notice-icon">⚡</span>
         <div>
-          <strong>Screen Wake Lock Active:</strong> Keep this browser tab open to ensure continuous GPS telemetry while walking or driving.
+          <strong id="notice-title">Background Tracking & Session Memory Active:</strong>
+          <div id="notice-desc" style="font-size: 0.78rem; color: #cbd5e1; margin-top: 0.2rem; line-height: 1.4;">
+            Audio Keep-Alive and Web Worker Heartbeat are running. Location continues streaming when minimized or locked. If you refresh, tracking auto-resumes at your current position.
+          </div>
         </div>
       </div>
     </main>

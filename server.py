@@ -78,7 +78,8 @@ try:
     )
     from services.device_service import (
         register_device, list_devices, get_device, update_device,
-        revoke_device, delete_device, get_device_history, purge_all_duplicates
+        revoke_device, delete_device, get_device_history, purge_all_duplicates,
+        ping_device
     )
     from services.telemetry_service import (
         process_telemetry, list_geofence_events, distance_to_fence
@@ -961,6 +962,17 @@ def create_app():
         if not device:
             return jsonify({'error': 'Device not found'}), 404
         return jsonify(device)
+
+    @app.route('/api/devices/<did>/ping', methods=['POST'])
+    @app.route('/devices/<did>/ping', methods=['POST'])
+    def api_device_ping(did):
+        client_ip = request.headers.get('x-forwarded-for', request.remote_addr)
+        if client_ip and ',' in client_ip:
+            client_ip = client_ip.split(',')[0].strip()
+        updated = ping_device(did, client_ip=client_ip)
+        if not updated:
+            return jsonify({'error': 'Device not found'}), 404
+        return jsonify({'success': True, 'device_id': did, 'status': updated.get('status', 'online')})
 
     @app.route('/api/devices/<did>', methods=['PUT'])
     @app.route('/devices/<did>', methods=['PUT'])

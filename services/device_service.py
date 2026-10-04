@@ -15,8 +15,8 @@ from datetime import datetime, timedelta
 
 from services.db import get_tracking_db, in_memory_devices, in_memory_locations, use_mongodb
 
-ONLINE_THRESHOLD_SECONDS = int(os.environ.get('DEVICE_ONLINE_THRESHOLD_SEC', 180)) # 3 minutes
-INACTIVE_THRESHOLD_SECONDS = int(os.environ.get('DEVICE_INACTIVE_THRESHOLD_SEC', 360)) # 6 minutes
+ONLINE_THRESHOLD_SECONDS = int(os.environ.get('DEVICE_ONLINE_THRESHOLD_SEC', 300)) # 5 minutes
+INACTIVE_THRESHOLD_SECONDS = int(os.environ.get('DEVICE_INACTIVE_THRESHOLD_SEC', 600)) # 10 minutes
 
 GENERIC_NAMES = {'mobile device', 'mobile phone', 'device', 'phone', 'anonymous', 'anon'}
 
@@ -399,6 +399,22 @@ def update_device(device_id: str, updates: dict) -> dict:
             print(f">> [MongoDB Device Update Error] {e}")
 
     return existing
+
+def ping_device(device_id: str, client_ip: str = None) -> dict:
+    """
+    Heartbeat ping from mobile device.
+    Keeps device ONLINE even when page is minimized or screen is locked in the background.
+    """
+    dev = get_device(device_id)
+    if not dev or dev.get('revoked'):
+        return None
+    now = datetime.utcnow().isoformat() + 'Z'
+    updates = {'last_seen': now}
+    if client_ip:
+        updates['client_ip'] = client_ip
+    if not dev.get('is_offline_forced'):
+        updates['status'] = 'online'
+    return update_device(device_id, updates)
 
 def purge_all_duplicates() -> int:
     """Purges all duplicate device copies across the database."""
