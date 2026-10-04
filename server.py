@@ -966,13 +966,16 @@ def create_app():
     @app.route('/api/devices/<did>/ping', methods=['POST'])
     @app.route('/devices/<did>/ping', methods=['POST'])
     def api_device_ping(did):
+        data = request.get_json(force=True, silent=True) or {}
         client_ip = request.headers.get('x-forwarded-for', request.remote_addr)
         if client_ip and ',' in client_ip:
             client_ip = client_ip.split(',')[0].strip()
-        updated = ping_device(did, client_ip=client_ip)
+        req_status = data.get('status', 'online')
+        req_active = data.get('tracking_active', (req_status == 'online'))
+        updated = ping_device(did, client_ip=client_ip, status=req_status, tracking_active=req_active)
         if not updated:
             return jsonify({'error': 'Device not found'}), 404
-        return jsonify({'success': True, 'device_id': did, 'status': updated.get('status', 'online')})
+        return jsonify({'success': True, 'device_id': did, 'status': updated.get('status', 'online'), 'tracking_active': updated.get('tracking_active', True)})
 
     @app.route('/api/devices/<did>', methods=['PUT'])
     @app.route('/devices/<did>', methods=['PUT'])
@@ -1281,6 +1284,15 @@ def run_builtin():
                     self.send_json({'error': err}, status=400)
                 else:
                     self.send_json(dev, status=201)
+            elif path.startswith('/api/devices/') and path.endswith('/ping'):
+                did = path.split('/')[3]
+                req_status = body.get('status', 'online')
+                req_active = body.get('tracking_active', (req_status == 'online'))
+                updated = ping_device(did, status=req_status, tracking_active=req_active)
+                if updated:
+                    self.send_json({'success': True, 'device_id': did, 'status': updated.get('status', 'online'), 'tracking_active': updated.get('tracking_active', True)})
+                else:
+                    self.send_json({'error': 'Device not found'}, status=404)
             elif path == '/api/telemetry':
                 res, err = process_telemetry(body, db_list_geofences())
                 if err:

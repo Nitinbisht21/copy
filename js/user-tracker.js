@@ -882,6 +882,19 @@
       if (this.worker) this.worker.postMessage('start');
       if (this.pipTracker) this.pipTracker.startStream();
 
+      // Immediately notify backend that device is ONLINE and actively tracking
+      if (this.deviceId) {
+        fetch(API.PING(this.deviceId), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_uuid: this.clientUuid,
+            status: 'online',
+            tracking_active: true
+          })
+        }).catch(() => {});
+      }
+
       const options = {
         enableHighAccuracy: true,
         maximumAge: 0, // Force fresh real-time satellite reading, bypass stale browser cache
@@ -915,6 +928,19 @@
       this.lastTelemetrySendTime = 0;
       this.isOfflineDueToFence = false;
 
+      // Immediately notify backend that device is now OFFLINE and stopped tracking
+      if (this.deviceId) {
+        fetch(API.PING(this.deviceId), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_uuid: this.clientUuid,
+            status: 'offline',
+            tracking_active: false
+          })
+        }).catch(() => {});
+      }
+
       if (this.watchId !== null) {
         navigator.geolocation.clearWatch(this.watchId);
         this.watchId = null;
@@ -926,7 +952,7 @@
       if (this.pipTracker) this.pipTracker.stop();
 
       this.updateUIState('stopped');
-      this.networkStatus.textContent = 'Tracking Stopped';
+      this.networkStatus.textContent = 'Tracking Stopped (Device Offline)';
       if (this.statSyncCountdown) {
         this.statSyncCountdown.textContent = 'Next upload: Standby';
         this.statSyncCountdown.style.color = '#38bdf8';
@@ -987,7 +1013,8 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               client_uuid: this.clientUuid,
-              status: 'online'
+              status: 'online',
+              tracking_active: true
             })
           });
         } catch (e) {}

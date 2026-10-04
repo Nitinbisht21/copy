@@ -15,36 +15,39 @@ from datetime import datetime, timedelta
 
 from services.db import get_tracking_db, in_memory_devices, in_memory_locations, use_mongodb
 
-ONLINE_THRESHOLD_SECONDS = int(os.environ.get('DEVICE_ONLINE_THRESHOLD_SEC', 300)) # 5 minutes
-INACTIVE_THRESHOLD_SECONDS = int(os.environ.get('DEVICE_INACTIVE_THRESHOLD_SEC', 600)) # 10 minutes
-
 GENERIC_NAMES = {'mobile device', 'mobile phone', 'device', 'phone', 'anonymous', 'anon'}
 
 def compute_device_status(device: dict) -> str:
-    """Computes dynamic status: online, inactive, or offline based on last_seen and geofence state."""
+    """
+    Computes device status strictly without any time thresholds.
+    Only two states exist:
+      - 'online': when device is active (tracking and sharing location)
+      - 'offline': when device is stopped, not sharing location, or outside fence (>100m)
+    """
     if device.get('revoked'):
         return 'revoked'
 
     if device.get('is_offline_forced') or device.get('offline_reason') == 'outside_fence_100m':
         return 'offline'
 
-    last_seen_str = device.get('last_seen')
-    if not last_seen_str:
+    # If tracking_active flag is explicitly set
+    if device.get('tracking_active') is False:
         return 'offline'
+    if device.get('tracking_active') is True:
+        return 'online'
 
-    try:
-        clean_ts = last_seen_str.rstrip('Z')
-        last_dt = datetime.fromisoformat(clean_ts)
-        diff_sec = (datetime.utcnow() - last_dt).total_seconds()
-
-        if diff_sec <= ONLINE_THRESHOLD_SECONDS:
-            return 'online'
-        elif diff_sec <= INACTIVE_THRESHOLD_SECONDS:
-            return 'inactive'
-        else:
-            return 'offline'
-    except Exception:
+    # Direct status attribute check
+    curr_status = (device.get('status') or '').lower().strip()
+    if curr_status == 'offline':
         return 'offline'
+    if curr_status == 'online':
+        return 'online'
+
+    # If device has recorded location and no offline flag, it is active/online
+    if device.get('last_location'):
+        return 'online'
+
+    return 'offline'
 
 def _is_generic_name(name: str) -> bool:
     """Checks if a name is a generic placeholder or default auto-name."""
@@ -400,10 +403,10 @@ def update_device(device_id: str, updates: dict) -> dict:
 
     return existing
 
-def ping_device(device_id: str, client_ip: str = None) -> dict:
+def ping_device(device_id: str, client_ip: str = None, status: str = 'online', tracking_active: bool = True) -> dict:
     """
-    Heartbeat ping from mobile device.
-    Keeps device ONLINE even when page is minimized or screen is locked in the background.
+    Heartbeat / state update from mobile device.
+    Keeps device ONLINE when tracking is active, or sets OFFLINE when tracking is stopped.
     """
     dev = get_device(device_id)
     if not dev or dev.get('revoked'):
@@ -412,8 +415,15 @@ def ping_device(device_id: str, client_ip: str = None) -> dict:
     updates = {'last_seen': now}
     if client_ip:
         updates['client_ip'] = client_ip
-    if not dev.get('is_offline_forced'):
-        updates['status'] = 'online'
+
+    if dev.get('is_offline_forced') or dev.get('offline_reason') == 'outside_fence_100m':
+        updates['status'] = 'offline'
+        updates['tracking_active'] = False
+    else:
+        is_online = (status == 'online' and tracking_active)
+        updates['status'] = 'online' if is_online else 'offline'
+        updates['tracking_active'] = is_online
+
     return update_device(device_id, updates)
 
 def purge_all_duplicates() -> int:

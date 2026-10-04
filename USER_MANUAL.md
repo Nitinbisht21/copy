@@ -230,7 +230,7 @@ The platform runs on real GPS telemetry from mobile phones and external tracking
 - Automatically buffers locations in `localStorage` when offline and flushes when reconnected.
 
 ### Multi-Device Fleet Monitoring
-- Real-time device registry tracks status (`online`, `inactive`, `offline`), platform, accuracy, battery, and last seen.
+- Real-time device registry tracks status (`online`, `offline`), platform, accuracy, battery, and last seen.
 - Admin dashboard polls `/api/devices` every 4 seconds, rendering live pulsed markers with heading arrows on the Leaflet canvas.
 - Click any device in the sidebar to inspect its details and view its full historical movement path trail on the map.
 
