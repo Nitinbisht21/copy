@@ -605,13 +605,13 @@
           <span style="display: flex; align-items: center; gap: 0.4rem;">
             <span>🔄</span> Auto-open Floating Tracker on Start (Over Other Apps)
           </span>
-          <input type="checkbox" id="chk-auto-pip" checked>
+          <input type="checkbox" id="chk-auto-pip">
         </label>
       </div>
 
-      <!-- Hidden Canvas & Video for Picture-in-Picture Streaming -->
+      <!-- Canvas & Video for Picture-in-Picture Streaming (Activated only on user click) -->
       <canvas id="pip-canvas" width="360" height="200" style="display: none;"></canvas>
-      <video id="pip-video" style="display: none;" playsinline muted autoplay></video>
+      <video id="pip-video" style="display: none;" playsinline muted></video>
 
       <!-- Real-time Telemetry Grid -->
       <section class="telemetry-grid" aria-label="Real-time Telemetry">
