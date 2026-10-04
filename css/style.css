@@ -2024,8 +2024,10 @@ input:checked + .slider:before {
   background: #64748b;
 }
 
-.status-indicator-dot.revoked {
+.status-indicator-dot.outside-flagged {
   background: #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.85);
+  animation: pulseDot 1.2s infinite;
 }
 
 .device-name-text {
@@ -2058,6 +2060,12 @@ input:checked + .slider:before {
 .device-status-badge.online {
   background: rgba(16, 185, 129, 0.15);
   color: #10b981;
+}
+
+.device-status-badge.outside-flagged {
+  background: rgba(239, 68, 68, 0.22);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.45);
 }
 
 .device-status-badge.inactive {

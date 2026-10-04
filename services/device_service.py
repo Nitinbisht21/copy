@@ -22,13 +22,10 @@ def compute_device_status(device: dict) -> str:
     Computes device status strictly without any time thresholds.
     Only two states exist:
       - 'online': when device is active (tracking and sharing location)
-      - 'offline': when device is stopped, not sharing location, or outside fence (>100m)
+      - 'offline': when device is stopped, not sharing location, or offline
     """
     if device.get('revoked'):
         return 'revoked'
-
-    if device.get('is_offline_forced') or device.get('offline_reason') == 'outside_fence_100m':
-        return 'offline'
 
     # If tracking_active flag is explicitly set
     if device.get('tracking_active') is False:
@@ -377,7 +374,7 @@ def update_device(device_id: str, updates: dict) -> dict:
         'device_name', 'platform', 'revoked', 'last_seen', 'last_location',
         'current_fence', 'status', 'is_offline_forced', 'offline_reason',
         'distance_outside', 'tracking_active', 'fingerprint', 'client_ip',
-        'device_number', 'client_uuid'
+        'device_number', 'client_uuid', 'outside_fence', 'flagged', 'flag'
     ]
     for k in allowed_keys:
         if k in updates:
@@ -416,13 +413,9 @@ def ping_device(device_id: str, client_ip: str = None, status: str = 'online', t
     if client_ip:
         updates['client_ip'] = client_ip
 
-    if dev.get('is_offline_forced') or dev.get('offline_reason') == 'outside_fence_100m':
-        updates['status'] = 'offline'
-        updates['tracking_active'] = False
-    else:
-        is_online = (status == 'online' and tracking_active)
-        updates['status'] = 'online' if is_online else 'offline'
-        updates['tracking_active'] = is_online
+    is_online = (status == 'online' and tracking_active)
+    updates['status'] = 'online' if is_online else 'offline'
+    updates['tracking_active'] = is_online
 
     return update_device(device_id, updates)
 

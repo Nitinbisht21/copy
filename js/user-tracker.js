@@ -418,13 +418,19 @@
       // Fence Badge
       const fenceText = (this.tracker.statGeofence && this.tracker.statGeofence.textContent) || 'Outside Geofences';
       const isInside = fenceText.includes('Inside');
-      ctx.fillStyle = isInside ? 'rgba(16, 185, 129, 0.18)' : 'rgba(245, 158, 11, 0.18)';
+      const isFlagged = fenceText.includes('Flagged') || fenceText.includes('Outside');
+
+      const bgColor = isInside ? 'rgba(16, 185, 129, 0.18)' : (isFlagged ? 'rgba(239, 68, 68, 0.22)' : 'rgba(245, 158, 11, 0.18)');
+      const borderColor = isInside ? 'rgba(16, 185, 129, 0.45)' : (isFlagged ? 'rgba(239, 68, 68, 0.55)' : 'rgba(245, 158, 11, 0.45)');
+      const textColor = isInside ? '#34d399' : (isFlagged ? '#f87171' : '#fbbf24');
+
+      ctx.fillStyle = bgColor;
       ctx.fillRect(16, 118, w - 32, 26);
-      ctx.strokeStyle = isInside ? 'rgba(16, 185, 129, 0.45)' : 'rgba(245, 158, 11, 0.45)';
+      ctx.strokeStyle = borderColor;
       ctx.lineWidth = 1;
       ctx.strokeRect(16, 118, w - 32, 26);
 
-      ctx.fillStyle = isInside ? '#34d399' : '#fbbf24';
+      ctx.fillStyle = textColor;
       ctx.font = 'bold 11px system-ui, sans-serif';
       ctx.fillText(fenceText.slice(0, 38), 24, 135);
 
@@ -1149,26 +1155,24 @@
             if (this.userDisplayName) this.userDisplayName.textContent = this.deviceName;
           }
 
-          // Handle 100m outside fence cutoff: device set to offline and tracking paused
-          if (body.status === 'offline' || body.tracking_active === false) {
-            this.isOfflineDueToFence = true;
-            this.updateUIState('fence-offline');
-            const dist = body.distance_outside !== undefined ? body.distance_outside : '>100';
-            this.statGeofence.textContent = `🔴 Outside Fence (${dist}m) - OFFLINE (No Footprint Shared to DB)`;
+          // If outside geofence: track outside the fence, mark flag, do NOT pause or go offline!
+          const isOutside = Boolean(body.outside_fence || body.flagged || (body.current_fence && body.current_fence.includes('Outside')));
+          this.isOfflineDueToFence = false;
+          this.updateUIState('active');
+
+          if (isOutside) {
+            const dist = body.distance_outside !== undefined ? body.distance_outside : 0;
+            this.statGeofence.textContent = `🚩 Outside Fence (${dist}m - Flagged) • Live Footprint Shared`;
             this.statGeofence.style.color = '#ef4444';
-            this.networkStatus.textContent = 'Outside Fence (>100m) - Offline • No Footprint Shared to DB';
+            this.networkStatus.textContent = `Outside Fence (${dist}m) - Flagged • Live Footprints Transmitted to DB`;
+          } else if (body.inside_geofences && body.inside_geofences.length > 0) {
+            const fenceNames = body.inside_geofences.map(f => f.name).join(', ');
+            this.statGeofence.textContent = `🟢 Inside "${fenceNames}"`;
+            this.statGeofence.style.color = '#10b981';
+            this.networkStatus.textContent = 'Active Always • Transmitting Footprints (Every 2 min)';
           } else {
-            this.isOfflineDueToFence = false;
-            this.updateUIState('active');
-            if (body.inside_geofences && body.inside_geofences.length > 0) {
-              const fenceNames = body.inside_geofences.map(f => f.name).join(', ');
-              this.statGeofence.textContent = `🟢 Inside "${fenceNames}"`;
-              this.statGeofence.style.color = '#10b981';
-            } else {
-              const dist = body.distance_outside !== undefined ? body.distance_outside : '<100';
-              this.statGeofence.textContent = `🟡 Near Fence (${dist}m - Within 100m Buffer)`;
-              this.statGeofence.style.color = '#f59e0b';
-            }
+            this.statGeofence.textContent = 'No Active Geofences';
+            this.statGeofence.style.color = '#94a3b8';
             this.networkStatus.textContent = 'Active Always • Transmitting Footprints (Every 2 min)';
           }
 
@@ -1252,9 +1256,6 @@
         if (!this.isTracking) {
           this.statSyncCountdown.textContent = 'Next upload: Standby';
           this.statSyncCountdown.style.color = '#38bdf8';
-        } else if (this.isOfflineDueToFence) {
-          this.statSyncCountdown.textContent = 'Next upload: Paused (>100m outside)';
-          this.statSyncCountdown.style.color = '#ef4444';
         } else if (this.lastTelemetrySendTime === 0) {
           this.statSyncCountdown.textContent = 'Next upload: On GPS fix';
           this.statSyncCountdown.style.color = '#38bdf8';
@@ -1273,16 +1274,10 @@
 
     updateUIState(state) {
       if (this.bgBadge) {
-        this.bgBadge.style.display = (state === 'active' || state === 'seeking' || state === 'fence-offline') ? 'inline-block' : 'none';
+        this.bgBadge.style.display = (state === 'active' || state === 'seeking') ? 'inline-block' : 'none';
       }
 
-      if (state === 'fence-offline') {
-        this.statusPulse.className = 'pulse-dot offline';
-        this.statusLabel.textContent = 'Device Offline (>100m Outside Fence)';
-        this.btnToggleTrack.className = 'btn-track active';
-        this.btnTrackText.textContent = 'Stop GPS Tracking';
-        this.btnTrackIcon.innerHTML = '<rect x="6" y="6" width="12" height="12" rx="2"></rect>';
-      } else if (state === 'active') {
+      if (state === 'active') {
         this.statusPulse.className = 'pulse-dot active';
         this.statusLabel.textContent = 'Live Tracking Active';
         this.btnToggleTrack.className = 'btn-track active';

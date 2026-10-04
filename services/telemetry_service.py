@@ -367,55 +367,20 @@ def process_telemetry(payload: dict, active_fences: list = None) -> tuple:
             events_triggered.append(event_doc)
             _store_event(event_doc)
 
-    # 2. Check distance to fence: If >100m outside active fence, set OFFLINE and DO NOT TRACK
+    # 2. Check geofence boundary & flag outside state (100m hidden radius completely removed)
     min_dist_to_fence = 0.0
-    is_outside_100m = False
+    is_outside_fence = False
 
     if fences:
         if currently_inside_fences:
             min_dist_to_fence = 0.0
-            is_outside_100m = False
+            is_outside_fence = False
         else:
             fence_distances = [distance_to_fence(point, f) for f in fences]
             min_dist_to_fence = min(fence_distances) if fence_distances else 0.0
-            if min_dist_to_fence > 100.0:
-                is_outside_100m = True
+            is_outside_fence = True
 
-    if is_outside_100m:
-        # User requirement: when out of fence >100m, set to offline and DO NOT track outside the fence (no footprint to db)
-        last_loc_payload = {
-            'latitude': lat,
-            'longitude': lng,
-            'accuracy': accuracy,
-            'speed': speed,
-            'heading': heading,
-            'timestamp': timestamp
-        }
-        update_device(device_id, {
-            'last_seen': timestamp,
-            'status': 'offline',
-            'is_offline_forced': True,
-            'offline_reason': 'outside_fence_100m',
-            'distance_outside': round(min_dist_to_fence, 1),
-            'current_fence': f"Outside ({round(min_dist_to_fence)}m - Tracking Paused)",
-            'last_location': last_loc_payload
-        })
-
-        return {
-            'success': True,
-            'device_id': device_id,
-            'status': 'offline',
-            'tracking_active': False,
-            'footprint_recorded': False,
-            'distance_outside': round(min_dist_to_fence, 1),
-            'coordinate': {'latitude': lat, 'longitude': lng, 'accuracy': accuracy},
-            'message': f"Device is {round(min_dist_to_fence, 1)}m outside fence (>100m limit). Device set to OFFLINE. Tracking paused.",
-            'inside_geofences': [],
-            'events': events_triggered,
-            'timestamp': timestamp
-        }, None
-
-    # 3. Inside fence or within 100m: Device is ACTIVE ALWAYS, record footprint into database
+    # 3. Always track location (even outside the fence) and mark breach flag
     loc_record = {
         'id': f"loc_{int(datetime.utcnow().timestamp()*1000)}_{uuid.uuid4().hex[:6]}",
         'device_id': device_id,
@@ -429,6 +394,9 @@ def process_telemetry(payload: dict, active_fences: list = None) -> tuple:
         'accuracy': accuracy,
         'speed': speed,
         'heading': heading,
+        'outside_fence': is_outside_fence,
+        'flagged': is_outside_fence,
+        'flag': 'OUTSIDE_FENCE' if is_outside_fence else None,
         'distance_outside': round(min_dist_to_fence, 1),
         'timestamp': timestamp,
         'created_at': now
@@ -446,15 +414,21 @@ def process_telemetry(payload: dict, active_fences: list = None) -> tuple:
         except Exception as e:
             print(f">> [MongoDB Location Insert Error] {e}")
 
-    primary_fence_name = currently_inside_fences[0]['name'] if currently_inside_fences else (
-        f"Buffer Zone ({round(min_dist_to_fence)}m from fence)" if fences else "No Active Fences"
-    )
+    if is_outside_fence:
+        fence_display = f"🚩 Outside Geofence ({round(min_dist_to_fence)}m - Flagged)"
+    elif currently_inside_fences:
+        fence_display = f"🟢 Inside \"{currently_inside_fences[0]['name']}\""
+    else:
+        fence_display = "No Active Fences"
 
     update_device(device_id, {
         'last_seen': timestamp,
         'status': 'online',
+        'tracking_active': True,
         'is_offline_forced': False,
         'offline_reason': None,
+        'outside_fence': is_outside_fence,
+        'flagged': is_outside_fence,
         'distance_outside': round(min_dist_to_fence, 1),
         'last_location': {
             'latitude': lat,
@@ -462,9 +436,11 @@ def process_telemetry(payload: dict, active_fences: list = None) -> tuple:
             'accuracy': accuracy,
             'speed': speed,
             'heading': heading,
+            'outside_fence': is_outside_fence,
+            'flagged': is_outside_fence,
             'timestamp': timestamp
         },
-        'current_fence': primary_fence_name
+        'current_fence': fence_display
     })
 
     return {
@@ -473,6 +449,8 @@ def process_telemetry(payload: dict, active_fences: list = None) -> tuple:
         'status': 'online',
         'tracking_active': True,
         'footprint_recorded': True,
+        'outside_fence': is_outside_fence,
+        'flagged': is_outside_fence,
         'coordinate': {'latitude': lat, 'longitude': lng},
         'accuracy': accuracy,
         'speed': speed,

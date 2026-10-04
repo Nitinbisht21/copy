@@ -157,12 +157,19 @@
     }
 
     evaluateDeviceGeofence(device) {
-      const isOutsideForced = Boolean(device.is_offline_forced || device.offline_reason === 'outside_fence_100m');
-      if (isOutsideForced) {
-        return `🚫 Outside (${Math.round(device.distance_outside || 100)}m - Paused)`;
+      const lastLoc = device.last_location;
+      const isOutside = Boolean(
+        device.outside_fence ||
+        device.flagged ||
+        (lastLoc && (lastLoc.outside_fence || lastLoc.flagged)) ||
+        (device.current_fence && device.current_fence.includes('Outside'))
+      );
+
+      if (isOutside) {
+        const dist = Math.round(device.distance_outside || (lastLoc && lastLoc.distance_outside) || 0);
+        return `🚩 Outside (${dist}m - Flagged)`;
       }
 
-      const lastLoc = device.last_location;
       if (!lastLoc || typeof lastLoc.latitude !== 'number' || typeof lastLoc.longitude !== 'number') {
         return 'No GPS Fix';
       }
@@ -192,7 +199,7 @@
         return `🟢 ${device.current_fence}`;
       }
 
-      return 'Outside Fences';
+      return '🚩 Outside Fences (Flagged)';
     }
 
     renderDeviceList() {
@@ -217,13 +224,22 @@
 
       this.deviceListContainer.innerHTML = this.devices
         .map((device) => {
-          const statusClass = device.status || 'offline';
-          const isOutsideForced = Boolean(device.is_offline_forced || device.offline_reason === 'outside_fence_100m');
-          let statusLabel = statusClass.toUpperCase();
-          if (isOutsideForced) {
-            statusLabel = 'OFFLINE (>100m)';
-          }
+          const statusClass = (device.status === 'online') ? 'online' : 'offline';
           const lastLoc = device.last_location;
+          const isOutside = Boolean(
+            device.outside_fence ||
+            device.flagged ||
+            (lastLoc && (lastLoc.outside_fence || lastLoc.flagged)) ||
+            (device.current_fence && device.current_fence.includes('Outside'))
+          );
+
+          let statusBadgeClass = statusClass;
+          let statusLabel = statusClass.toUpperCase();
+          if (statusClass === 'online' && isOutside) {
+            statusBadgeClass = 'outside-flagged';
+            statusLabel = '🚩 OUTSIDE (FLAGGED)';
+          }
+
           const coordsStr = lastLoc ? `${lastLoc.latitude.toFixed(4)}°, ${lastLoc.longitude.toFixed(4)}°` : 'No GPS Fix';
           const accStr = (lastLoc && lastLoc.accuracy) ? `±${Math.round(lastLoc.accuracy)}m` : '';
           const fenceStr = this.evaluateDeviceGeofence(device);
@@ -233,11 +249,11 @@
             <div class="device-card-item ${statusClass}" data-device-id="${device.device_id}">
               <div class="device-header-row">
                 <div class="device-identity">
-                  <span class="status-indicator-dot ${statusClass}"></span>
+                  <span class="status-indicator-dot ${statusBadgeClass}"></span>
                   <span class="device-name-text">${this.escape(device.device_name || 'Device')}</span>
                   <span class="device-pill-id">${this.escape(device.device_id)}</span>
                 </div>
-                <span class="device-status-badge ${statusClass}">${statusLabel}</span>
+                <span class="device-status-badge ${statusBadgeClass}">${statusLabel}</span>
               </div>
 
               <div class="device-meta-row">
@@ -263,12 +279,16 @@
     }
 
     getDeviceMarkerColor(device, index = 0) {
-      const isOutsideForced = Boolean(device.is_offline_forced || device.offline_reason === 'outside_fence_100m');
-      if (isOutsideForced) return '#ef4444';
+      const isOutside = Boolean(
+        device.outside_fence ||
+        device.flagged ||
+        (device.last_location && (device.last_location.outside_fence || device.last_location.flagged)) ||
+        (device.current_fence && device.current_fence.includes('Outside'))
+      );
+      if (isOutside) return '#ef4444'; // Red flagged marker when outside fence!
 
       const status = device.status || 'offline';
       if (status === 'offline') return '#94a3b8';
-      if (status === 'inactive') return '#f59e0b';
 
       const FLEET_PALETTE = ['#10b981', '#3b82f6', '#8b5cf6', '#f97316', '#06b6d4', '#ec4899', '#14b8a6', '#eab308'];
       let num = device.device_number || (index + 1);
@@ -370,22 +390,30 @@
 
     generateDevicePopup(device) {
       const loc = device.last_location || {};
-      const statusClass = device.status || 'offline';
-      const isOutsideForced = Boolean(device.is_offline_forced || device.offline_reason === 'outside_fence_100m');
-      const statusText = isOutsideForced
-        ? `OFFLINE (${Math.round(device.distance_outside || 100)}m Outside - Paused)`
-        : (device.status || 'offline').toUpperCase();
+      const statusClass = (device.status === 'online') ? 'online' : 'offline';
+      const isOutside = Boolean(
+        device.outside_fence ||
+        device.flagged ||
+        (loc && (loc.outside_fence || loc.flagged)) ||
+        (device.current_fence && device.current_fence.includes('Outside'))
+      );
+      let statusText = (device.status || 'offline').toUpperCase();
+      let statusBadgeClass = statusClass;
+      if (statusClass === 'online' && isOutside) {
+        statusText = '🚩 ONLINE (OUTSIDE - FLAGGED)';
+        statusBadgeClass = 'outside-flagged';
+      }
       const lastSeenStr = device.last_seen ? new Date(device.last_seen).toLocaleTimeString() : 'Unknown';
       const fenceDisplay = this.evaluateDeviceGeofence(device);
 
       return `
         <div class="device-popup-card">
           <div class="popup-title-row">
-            <span class="status-indicator-dot ${statusClass}"></span>
+            <span class="status-indicator-dot ${statusBadgeClass}"></span>
             <strong style="font-size:0.95rem;">${this.escape(device.device_name || 'Device')}</strong>
           </div>
           <div class="popup-id-row">
-            <code>${this.escape(device.device_id)}</code> • <span class="badge-${statusClass}">${statusText}</span>
+            <code>${this.escape(device.device_id)}</code> • <span class="device-status-badge ${statusBadgeClass}">${statusText}</span>
           </div>
           <div class="popup-grid">
             <div class="popup-grid-item">

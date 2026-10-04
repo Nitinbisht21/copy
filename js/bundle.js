@@ -2987,8 +2987,13 @@
 
       const timeStr = entry.created_at ? new Date(entry.created_at).toLocaleTimeString() : new Date().toLocaleTimeString();
       const ev = (entry.event || 'INSIDE').toUpperCase();
-      const eventClass = ev.toLowerCase();
-      const flagEmoji = (ev === 'ENTER' || ev === 'EXIT') ? '🚩 ' : '📍 ';
+      const isOutsideFlag = (ev === 'OUTSIDE_FLAG' || entry.outside_fence || entry.flagged);
+      if (isOutsideFlag && (!entry.color || entry.color === '#2563eb')) {
+        allottedColor = '#ef4444';
+      }
+      const eventClass = isOutsideFlag ? 'exit' : ev.toLowerCase();
+      const flagEmoji = (isOutsideFlag || ev === 'ENTER' || ev === 'EXIT') ? '🚩 ' : '📍 ';
+      const displayEvent = isOutsideFlag ? 'OUTSIDE (FLAGGED)' : ev;
 
       const item = document.createElement('div');
       item.className = 'footprint-log-item';
@@ -2996,7 +3001,7 @@
       item.innerHTML = `
         <div class="log-meta">
           <span class="log-time">${timeStr}</span>
-          <span class="log-badge ${eventClass}">${flagEmoji}${ev}</span>
+          <span class="log-badge ${eventClass}">${flagEmoji}${displayEvent}</span>
           <span class="log-db-pill db-tag-sim" title="Real GPS Telemetry stored in MongoDB">REAL GPS</span>
           <span class="log-target">
             <span class="log-color-pip" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${allottedColor};box-shadow:0 0 4px ${allottedColor};margin-right:4px;"></span>
@@ -3037,7 +3042,8 @@
             // Reverse so prepend puts newest at top
             [...rows].reverse().forEach(r => {
               const fence = this.store.getById(r.geofence_id) || this.store.getAll().find(f => f.name === r.geofence_name);
-              const allottedColor = r.color || (fence && fence.color) || '#2563eb';
+              const isOutside = (r.event === 'OUTSIDE_FLAG' || r.outside_fence || r.flagged);
+              const allottedColor = isOutside ? '#ef4444' : (r.color || (fence && fence.color) || '#2563eb');
               const ev = (r.event || 'INSIDE').toUpperCase();
 
               if (ev === 'ENTER' || ev === 'EXIT') {

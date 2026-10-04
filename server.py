@@ -576,31 +576,33 @@ def evaluate_telemetry(data):
         # Record boundary transition to MongoDB simulation database
         db_record_footprint(ev)
 
-    # Calculate distance to active fences
+    # Calculate distance to active fences and detect outside state
     min_dist_to_fence = 0.0
-    is_outside_100m = False
+    is_outside_fence = False
     active_fences = [f for f in all_fences if f.get('status') == 'active']
 
     if active_fences:
         if currently_inside:
             min_dist_to_fence = 0.0
-            is_outside_100m = False
+            is_outside_fence = False
         else:
             try:
                 distances = [distance_to_fence(point, f) for f in active_fences]
                 min_dist_to_fence = min(distances) if distances else 0.0
-                if min_dist_to_fence > 100.0:
-                    is_outside_100m = True
+                is_outside_fence = True
             except Exception:
                 pass
 
     return {
         'device_id': device_id,
         'coordinate': {'latitude': lat, 'longitude': lng},
-        'status': 'offline' if is_outside_100m else 'online',
-        'tracking_active': not is_outside_100m,
+        'status': 'online',
+        'tracking_active': True,
+        'outside_fence': is_outside_fence,
+        'flagged': is_outside_fence,
+        'flag': 'OUTSIDE_FENCE' if is_outside_fence else None,
         'distance_outside': round(min_dist_to_fence, 1),
-        'inside_geofences': [] if is_outside_100m else inside_details,
+        'inside_geofences': inside_details,
         'events': events
     }
 
@@ -622,9 +624,12 @@ def db_record_footprint(data):
     longitude = float(data.get('longitude', 0.0))
     event = str(data.get('event', 'INSIDE')).upper()
     source = str(data.get('source', 'gps_telemetry'))
+    is_outside = bool(data.get('outside_fence') or data.get('flagged') or event == 'OUTSIDE_FLAG')
 
     color = data.get('color')
-    if not color and geofence_id:
+    if is_outside and not color:
+        color = '#ef4444'
+    elif not color and geofence_id:
         fence = in_memory_geofences.get(geofence_id)
         if fence and fence.get('color'):
             color = fence['color']
@@ -637,7 +642,10 @@ def db_record_footprint(data):
         'latitude': latitude,
         'longitude': longitude,
         'event': event,
-        'color': color or '#2563eb',
+        'color': color or ('#ef4444' if is_outside else '#2563eb'),
+        'outside_fence': is_outside,
+        'flagged': is_outside,
+        'distance_outside': data.get('distance_outside', 0.0),
         'source': source,
         'database': MONGODB_SIMULATION_DB,
         'collection': 'simulation_footprints',
@@ -1029,21 +1037,42 @@ def create_app():
         if err:
             return jsonify({'error': err}), 400
 
-        # When inside fence or within 100m: record periodic footprint to simulation_footprints
-        # When outside fence (>100m): footprint_recorded is False, so NO footprint is shared to db
+        # Record periodic footprint to simulation_footprints:
+        # Inside fence -> green/fence color FOOTPRINT_UPDATE
+        # Outside fence -> red OUTSIDE_FLAG with distance and breach flag
         if result and result.get('footprint_recorded', True):
             coord = result.get('coordinate') or {}
+            is_outside = bool(result.get('outside_fence') or result.get('flagged'))
             primary_fence = (result.get('inside_geofences') and result['inside_geofences'][0]) or {}
-            db_record_footprint({
-                'device_id': result.get('device_id'),
-                'geofence_id': primary_fence.get('id'),
-                'geofence_name': primary_fence.get('name', 'Safe Zone / Buffer'),
-                'latitude': coord.get('latitude', 0.0),
-                'longitude': coord.get('longitude', 0.0),
-                'event': 'FOOTPRINT_UPDATE',
-                'color': primary_fence.get('color', '#10b981'),
-                'source': 'real_mobile_gps'
-            })
+            dist_outside = result.get('distance_outside', 0.0)
+
+            if is_outside:
+                db_record_footprint({
+                    'device_id': result.get('device_id'),
+                    'geofence_id': 'outside_fence',
+                    'geofence_name': result.get('current_fence') or f"🚩 Outside Geofence ({round(dist_outside)}m - Flagged)",
+                    'latitude': coord.get('latitude', 0.0),
+                    'longitude': coord.get('longitude', 0.0),
+                    'event': 'OUTSIDE_FLAG',
+                    'color': '#ef4444',
+                    'outside_fence': True,
+                    'flagged': True,
+                    'distance_outside': dist_outside,
+                    'source': 'real_mobile_gps'
+                })
+            else:
+                db_record_footprint({
+                    'device_id': result.get('device_id'),
+                    'geofence_id': primary_fence.get('id'),
+                    'geofence_name': primary_fence.get('name', 'Safe Zone / Inside Geofence'),
+                    'latitude': coord.get('latitude', 0.0),
+                    'longitude': coord.get('longitude', 0.0),
+                    'event': 'FOOTPRINT_UPDATE',
+                    'color': primary_fence.get('color', '#10b981'),
+                    'outside_fence': False,
+                    'flagged': False,
+                    'source': 'real_mobile_gps'
+                })
             if result.get('events'):
                 for ev in result['events']:
                     db_record_footprint({
@@ -1053,7 +1082,9 @@ def create_app():
                         'latitude': ev['latitude'],
                         'longitude': ev['longitude'],
                         'event': ev['event_type'],
-                        'color': ev.get('color', '#2563eb'),
+                        'color': '#ef4444' if ev['event_type'] == 'EXIT' else ev.get('color', '#2563eb'),
+                        'outside_fence': (ev['event_type'] == 'EXIT'),
+                        'flagged': (ev['event_type'] == 'EXIT'),
                         'source': 'real_mobile_gps'
                     })
         return jsonify(result), 200
@@ -1293,24 +1324,44 @@ def run_builtin():
                     self.send_json({'success': True, 'device_id': did, 'status': updated.get('status', 'online'), 'tracking_active': updated.get('tracking_active', True)})
                 else:
                     self.send_json({'error': 'Device not found'}, status=404)
-            elif path == '/api/telemetry':
+            elif path in ('/api/telemetry', '/telemetry'):
                 res, err = process_telemetry(body, db_list_geofences())
                 if err:
                     self.send_json({'error': err}, status=400)
                 else:
                     if res and res.get('footprint_recorded', True):
                         coord = res.get('coordinate') or {}
+                        is_outside = bool(res.get('outside_fence') or res.get('flagged'))
                         primary_fence = (res.get('inside_geofences') and res['inside_geofences'][0]) or {}
-                        db_record_footprint({
-                            'device_id': res.get('device_id'),
-                            'geofence_id': primary_fence.get('id'),
-                            'geofence_name': primary_fence.get('name', 'Safe Zone / Buffer'),
-                            'latitude': coord.get('latitude', 0.0),
-                            'longitude': coord.get('longitude', 0.0),
-                            'event': 'FOOTPRINT_UPDATE',
-                            'color': primary_fence.get('color', '#10b981'),
-                            'source': 'real_mobile_gps'
-                        })
+                        dist_outside = res.get('distance_outside', 0.0)
+
+                        if is_outside:
+                            db_record_footprint({
+                                'device_id': res.get('device_id'),
+                                'geofence_id': 'outside_fence',
+                                'geofence_name': res.get('current_fence') or f"🚩 Outside Geofence ({round(dist_outside)}m - Flagged)",
+                                'latitude': coord.get('latitude', 0.0),
+                                'longitude': coord.get('longitude', 0.0),
+                                'event': 'OUTSIDE_FLAG',
+                                'color': '#ef4444',
+                                'outside_fence': True,
+                                'flagged': True,
+                                'distance_outside': dist_outside,
+                                'source': 'real_mobile_gps'
+                            })
+                        else:
+                            db_record_footprint({
+                                'device_id': res.get('device_id'),
+                                'geofence_id': primary_fence.get('id'),
+                                'geofence_name': primary_fence.get('name', 'Safe Zone / Inside Geofence'),
+                                'latitude': coord.get('latitude', 0.0),
+                                'longitude': coord.get('longitude', 0.0),
+                                'event': 'FOOTPRINT_UPDATE',
+                                'color': primary_fence.get('color', '#10b981'),
+                                'outside_fence': False,
+                                'flagged': False,
+                                'source': 'real_mobile_gps'
+                            })
                         if res.get('events'):
                             for ev in res['events']:
                                 db_record_footprint({
@@ -1320,7 +1371,9 @@ def run_builtin():
                                     'latitude': ev['latitude'],
                                     'longitude': ev['longitude'],
                                     'event': ev['event_type'],
-                                    'color': ev.get('color', '#2563eb'),
+                                    'color': '#ef4444' if ev['event_type'] == 'EXIT' else ev.get('color', '#2563eb'),
+                                    'outside_fence': (ev['event_type'] == 'EXIT'),
+                                    'flagged': (ev['event_type'] == 'EXIT'),
                                     'source': 'real_mobile_gps'
                                 })
                     self.send_json(res, status=200)
