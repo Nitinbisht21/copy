@@ -145,20 +145,30 @@
   // =========================================================================
 
   class BackgroundAudioKeeper {
-    constructor() {
+    constructor(tracker = null) {
+      this.tracker = tracker;
       this.audio = null;
       this.isActive = false;
     }
 
     start() {
+      // Desktop / Laptop Guard:
+      // Laptops have full multitasking and do NOT freeze tabs like mobile OS.
+      // Playing looped audio on Windows laptops can spin Chromium's audio renderer at 100% CPU.
+      if (this.tracker && typeof this.tracker.detectPlatform === 'function') {
+        if (this.tracker.detectPlatform() === 'browser') {
+          return;
+        }
+      }
+
       if (this.isActive) return;
       this.isActive = true;
 
-      // Ultra-lightweight 1-second silent WAV base64 loop
-      // Uses 0% CPU and 0 MB RAM, avoids AudioContext buffer leakage
+      // Valid 1-second 8kHz mono silent PCM WAV (8,044 bytes, duration = 1.000s)
+      // Ticks cleanly once per second rather than a 0-sample spin-lock
       try {
         if (!this.audio) {
-          const silentWav = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+          const silentWav = 'data:audio/wav;base64,UklGRmQfAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQB4HwAA' + 'CAgI'.repeat(2000);
           this.audio = new Audio(silentWav);
           this.audio.loop = true;
           this.audio.volume = 0.001;
@@ -243,6 +253,15 @@
     }
 
     init() {
+      // Desktop / Laptop guard:
+      // Floating PiP canvas streaming is only needed on mobile phones to bypass Android/iOS background throttling.
+      // On laptops, hide PiP completely to eliminate GPU video encoding overhead and prevent browser freezing.
+      if (this.tracker && typeof this.tracker.detectPlatform === 'function' && this.tracker.detectPlatform() === 'browser') {
+        const pipGroup = document.querySelector('.pip-control-group');
+        if (pipGroup) pipGroup.style.display = 'none';
+        return;
+      }
+
       this.canvas = document.getElementById('pip-canvas');
       this.video = document.getElementById('pip-video');
       this.btnPip = document.getElementById('btn-toggle-pip');
@@ -545,7 +564,7 @@
       this.forceImmediateSync = false;
 
       // Background helpers
-      this.audioKeeper = new BackgroundAudioKeeper();
+      this.audioKeeper = new BackgroundAudioKeeper(this);
       this.worker = createBackgroundWorker(() => this.handleBackgroundHeartbeat());
       this.pipTracker = new PipTracker(this);
 
@@ -835,7 +854,7 @@
         this.networkStatus.textContent = 'Acquiring GPS Fix...';
       }
 
-      // Request Screen Wake Lock so screen does not lock and throttle GPS
+      // Request Screen Wake Lock (only active on mobile devices to preserve laptop power)
       await this.requestWakeLock();
 
       // Start Background Audio Keeper & Background Worker (PiP stream starts only on user toggle)
@@ -855,25 +874,18 @@
         }).catch(() => {});
       }
 
-      const options = {
-        enableHighAccuracy: true,
-        maximumAge: 3000, // 3-second cache to prevent sensor thrashing and CPU burn
-        timeout: 20000
-      };
-
-      // Trigger immediate one-shot satellite fix
-      try {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => this.handlePosition(pos),
-          (err) => {},
-          options
-        );
-      } catch (e) {}
-
       if (this.watchId !== null) {
         navigator.geolocation.clearWatch(this.watchId);
+        this.watchId = null;
       }
 
+      const options = {
+        enableHighAccuracy: true,
+        maximumAge: 4000,
+        timeout: 15000
+      };
+
+      // Watch position cleanly without simultaneous duplicate query contention
       this.watchId = navigator.geolocation.watchPosition(
         (pos) => this.handlePosition(pos),
         (err) => this.handlePositionError(err),
@@ -933,6 +945,8 @@
     }
 
     async requestWakeLock() {
+      // Desktop laptops do not need wake lock (prevents display driver lockups)
+      if (this.detectPlatform() === 'browser') return;
       if ('wakeLock' in navigator) {
         try {
           this.wakeLock = await navigator.wakeLock.request('screen');
@@ -1003,9 +1017,10 @@
       if (!this.isTracking || !position || !position.coords) return;
 
       const now = Date.now();
-      // Throttle high-frequency GPS sensor ticks to at most once per 800ms
-      // Eliminates UI thread lag, stops memory thrashing, drops RAM to < 50MB
-      if (this.lastPosUpdateTime && (now - this.lastPosUpdateTime < 800)) {
+      // Throttle GPS sensor ticks: 1500ms on desktop/laptop, 800ms on mobile
+      // Eliminates UI thread lag, stops memory thrashing, prevents laptop browser freeze
+      const minInterval = (this.detectPlatform() === 'browser') ? 1500 : 800;
+      if (this.lastPosUpdateTime && (now - this.lastPosUpdateTime < minInterval)) {
         return;
       }
       this.lastPosUpdateTime = now;

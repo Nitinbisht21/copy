@@ -219,16 +219,25 @@
       }
 
       if (this.devices.length === 0) {
-        this.deviceListContainer.innerHTML = `
-          <div class="empty-hint" style="font-size: 0.74rem; text-align: center; padding: 1rem 0.5rem;">
-            No devices connected yet.<br>
-            <button type="button" class="btn-connect-sm" onclick="window.adminDeviceManager.openConnectModal()" style="margin-top: 0.5rem;">
-              + Connect Phone
-            </button>
-          </div>
-        `;
+        if (this._lastListHash !== 'empty') {
+          this._lastListHash = 'empty';
+          this.deviceListContainer.innerHTML = `
+            <div class="empty-hint" style="font-size: 0.74rem; text-align: center; padding: 1rem 0.5rem;">
+              No devices connected yet.<br>
+              <button type="button" class="btn-connect-sm" onclick="window.adminDeviceManager.openConnectModal()" style="margin-top: 0.5rem;">
+                + Connect Phone
+              </button>
+            </div>
+          `;
+        }
         return;
       }
+
+      const listHash = this.devices.map(d => `${d.device_id}_${d.status}_${(d.last_location&&d.last_location.latitude)||0}_${(d.last_location&&d.last_location.longitude)||0}_${d.device_name}_${d.current_fence}_${this.activeHistoryDeviceId === d.device_id}`).join('|');
+      if (this._lastListHash === listHash) {
+        return;
+      }
+      this._lastListHash = listHash;
 
       this.deviceListContainer.innerHTML = this.devices
         .map((device) => {
@@ -341,6 +350,11 @@
 
           marker = L.marker(latlng, { icon, zIndexOffset: 800 }).addTo(this.realDevicesLayer);
           marker.bindPopup(() => this.generateDevicePopup(device));
+          marker._vf_last_lat = loc.latitude;
+          marker._vf_last_lng = loc.longitude;
+          marker._vf_last_status = status;
+          marker._vf_last_color = color;
+          marker._vf_last_label = labelText;
           this.deviceMarkers.set(device.device_id, marker);
 
           // Accuracy radius circle if available
@@ -356,20 +370,32 @@
             this.accuracyCircles.set(device.device_id, accCircle);
           }
         } else {
-          // Smoothly update location
-          marker.setLatLng(latlng);
-          marker.setIcon(
-            L.divIcon({
-              className: `real-device-map-marker ${status}`,
-              html: `
-                <div class="device-marker-pulse" style="background:${color}; box-shadow:0 0 10px ${color}"></div>
-                <div class="device-marker-core" style="background:${color}"></div>
-                <div class="device-marker-label">${this.escape(labelText)}</div>
-              `,
-              iconSize: [28, 28],
-              iconAnchor: [14, 14]
-            })
-          );
+          // Only update position if changed
+          if (marker._vf_last_lat !== loc.latitude || marker._vf_last_lng !== loc.longitude) {
+            marker.setLatLng(latlng);
+            marker._vf_last_lat = loc.latitude;
+            marker._vf_last_lng = loc.longitude;
+          }
+
+          // Only update icon if appearance changed
+          if (marker._vf_last_status !== status || marker._vf_last_color !== color || marker._vf_last_label !== labelText) {
+            marker._vf_last_status = status;
+            marker._vf_last_color = color;
+            marker._vf_last_label = labelText;
+            marker.setIcon(
+              L.divIcon({
+                className: `real-device-map-marker ${status}`,
+                html: `
+                  <div class="device-marker-pulse" style="background:${color}; box-shadow:0 0 10px ${color}"></div>
+                  <div class="device-marker-core" style="background:${color}"></div>
+                  <div class="device-marker-label">${this.escape(labelText)}</div>
+                `,
+                iconSize: [28, 28],
+                iconAnchor: [14, 14]
+              })
+            );
+          }
+
           if (marker.isPopupOpen()) {
             marker.setPopupContent(this.generateDevicePopup(device));
           }
