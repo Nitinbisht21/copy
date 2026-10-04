@@ -666,6 +666,23 @@
       // Update "Last updated X seconds ago" counter every second
       if (window._vfSyncInterval) clearInterval(window._vfSyncInterval);
       window._vfSyncInterval = setInterval(() => this.updateSyncElapsed(), 1000);
+
+      // Instantly mark device OFFLINE if mobile browser tab is closed or navigated away
+      const sendOfflineBeacon = () => {
+        if (this.isTracking && this.deviceId) {
+          const payload = JSON.stringify({
+            client_uuid: this.clientUuid,
+            status: 'offline',
+            tracking_active: false
+          });
+          if (navigator.sendBeacon) {
+            navigator.sendBeacon(API.PING(this.deviceId), new Blob([payload], { type: 'application/json' }));
+          }
+        }
+      };
+
+      window.addEventListener('pagehide', sendOfflineBeacon);
+      window.addEventListener('beforeunload', sendOfflineBeacon);
     }
 
     async registerAsBrandNewDevice() {
@@ -864,7 +881,7 @@
       );
     }
 
-    stopTracking() {
+    stopTracking(reason = '') {
       this.isTracking = false;
       this.wasTrackingActive = false;
       setStoredValue(STORAGE_KEYS.TRACKING_ACTIVE, 'false');
@@ -873,15 +890,28 @@
 
       // Immediately notify backend that device is now OFFLINE and stopped tracking
       if (this.deviceId) {
-        fetch(API.PING(this.deviceId), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            client_uuid: this.clientUuid,
-            status: 'offline',
-            tracking_active: false
-          })
-        }).catch(() => {});
+        const payload = JSON.stringify({
+          client_uuid: this.clientUuid,
+          status: 'offline',
+          tracking_active: false
+        });
+        try {
+          if (navigator.sendBeacon) {
+            navigator.sendBeacon(API.PING(this.deviceId), new Blob([payload], { type: 'application/json' }));
+          } else {
+            fetch(API.PING(this.deviceId), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: payload
+            }).catch(() => {});
+          }
+        } catch (e) {
+          fetch(API.PING(this.deviceId), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: payload
+          }).catch(() => {});
+        }
       }
 
       if (this.watchId !== null) {
@@ -895,10 +925,10 @@
       if (this.pipTracker) this.pipTracker.stop();
 
       this.updateUIState('stopped');
-      this.networkStatus.textContent = 'Tracking Stopped (Device Offline)';
+      this.networkStatus.textContent = reason || 'Tracking Stopped (Device Offline)';
       if (this.statSyncCountdown) {
-        this.statSyncCountdown.textContent = 'Next upload: Standby';
-        this.statSyncCountdown.style.color = '#38bdf8';
+        this.statSyncCountdown.textContent = 'Next upload: Standby (Offline)';
+        this.statSyncCountdown.style.color = '#94a3b8';
       }
     }
 
@@ -1015,20 +1045,20 @@
     }
 
     handlePositionError(error) {
-      let msg = 'GPS error occurred.';
       switch (error.code) {
         case error.PERMISSION_DENIED:
-          msg = 'Location permission denied. Please allow location access in your browser settings.';
-          this.stopTracking();
+          this.stopTracking('Location permission denied. GPS tracking stopped.');
           break;
         case error.POSITION_UNAVAILABLE:
-          msg = 'GPS signal unavailable. Move to an area with clear sky view.';
+          this.stopTracking('GPS turned off / unavailable on mobile. Device Offline.');
           break;
         case error.TIMEOUT:
-          msg = 'GPS acquisition timed out. Retrying...';
+          this.networkStatus.textContent = 'GPS acquisition timed out. Retrying satellite fix...';
+          break;
+        default:
+          this.networkStatus.textContent = 'GPS signal lost. Checking sensors...';
           break;
       }
-      this.networkStatus.textContent = msg;
     }
 
     updateTelemetryDisplay(pos) {
@@ -1231,8 +1261,8 @@
         this.btnToggleTrack.className = 'btn-track loading';
         this.btnTrackText.textContent = 'Connecting GPS...';
       } else {
-        this.statusPulse.className = 'pulse-dot';
-        this.statusLabel.textContent = 'Tracking Stopped';
+        this.statusPulse.className = 'pulse-dot offline';
+        this.statusLabel.textContent = 'Tracking Stopped (Offline)';
         this.btnToggleTrack.className = 'btn-track';
         this.btnTrackText.textContent = 'Start GPS Tracking';
         this.btnTrackIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';

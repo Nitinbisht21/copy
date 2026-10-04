@@ -11,40 +11,75 @@ import re
 import uuid
 import math
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from services.db import get_tracking_db, in_memory_devices, in_memory_locations, use_mongodb
 
 GENERIC_NAMES = {'mobile device', 'mobile phone', 'device', 'phone', 'anonymous', 'anon'}
 
+# Mobile devices send heartbeats every 15-25s.
+# If no signal or location received in 45s, device is automatically computed as OFFLINE.
+ONLINE_HEARTBEAT_TIMEOUT_SECONDS = 45
+
+def parse_iso_timestamp(ts) -> datetime:
+    """Safely parses ISO timestamp into UTC-aware datetime."""
+    if not ts:
+        return None
+    try:
+        s = str(ts).strip()
+        if s.endswith('Z'):
+            s = s[:-1] + '+00:00'
+        if '+' not in s and '-' not in s[10:]:
+            s += '+00:00'
+        return datetime.fromisoformat(s)
+    except Exception:
+        for fmt in ('%Y-%m-%dT%H:%M:%S.%f%z', '%Y-%m-%dT%H:%M:%S%z', '%Y-%m-%dT%H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S'):
+            try:
+                dt = datetime.strptime(str(ts).strip().rstrip('Z'), fmt)
+                return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+            except Exception:
+                continue
+    return None
+
 def compute_device_status(device: dict) -> str:
     """
-    Computes device status strictly without any time thresholds.
+    Computes device status strictly without intermediate 'inactive' thresholds.
     Only two states exist:
-      - 'online': when device is active (tracking and sharing location)
-      - 'offline': when device is stopped, not sharing location, or offline
+      - 'online': when device is active, tracking, and sending heartbeats (last_seen <= 45s)
+      - 'offline': when device is stopped, GPS is disabled, disconnected, or last_seen > 45s
     """
+    if not device:
+        return 'offline'
+
     if device.get('revoked'):
         return 'revoked'
 
-    # If tracking_active flag is explicitly set
-    if device.get('tracking_active') is False:
+    # If tracking was explicitly stopped or forced offline
+    if device.get('is_offline_forced') or device.get('tracking_active') is False:
         return 'offline'
-    if device.get('tracking_active') is True:
-        return 'online'
 
-    # Direct status attribute check
+    # If status is set to offline
     curr_status = (device.get('status') or '').lower().strip()
     if curr_status == 'offline':
         return 'offline'
-    if curr_status == 'online':
-        return 'online'
 
-    # If device has recorded location and no offline flag, it is active/online
-    if device.get('last_location'):
-        return 'online'
+    # Check last_seen timestamp against heartbeat timeout
+    last_seen_str = device.get('last_seen')
+    if not last_seen_str:
+        return 'offline'
 
-    return 'offline'
+    last_dt = parse_iso_timestamp(last_seen_str)
+    if not last_dt:
+        return 'offline'
+
+    now_utc = datetime.now(timezone.utc)
+    diff_sec = (now_utc - last_dt).total_seconds()
+
+    # If device stopped communicating for more than 45 seconds, it is OFFLINE
+    if diff_sec > ONLINE_HEARTBEAT_TIMEOUT_SECONDS:
+        return 'offline'
+
+    return 'online'
 
 def _is_generic_name(name: str) -> bool:
     """Checks if a name is a generic placeholder or default auto-name."""
@@ -266,7 +301,9 @@ def get_device(device_id: str) -> dict:
 
     if dev:
         dev_copy = dict(dev)
-        dev_copy['status'] = compute_device_status(dev_copy)
+        computed_status = compute_device_status(dev_copy)
+        dev_copy['status'] = computed_status
+        dev_copy['tracking_active'] = (computed_status == 'online')
         return dev_copy
     return None
 
@@ -358,7 +395,24 @@ def list_devices(user_id: str = None, include_revoked: bool = False) -> list:
     final_devices = []
     for d in deduped:
         d_copy = dict(d)
-        d_copy['status'] = compute_device_status(d_copy)
+        computed_status = compute_device_status(d_copy)
+        if d.get('status') != computed_status:
+            d['status'] = computed_status
+            d['tracking_active'] = (computed_status == 'online')
+            did = d.get('device_id')
+            if did and did in in_memory_devices:
+                in_memory_devices[did]['status'] = computed_status
+                in_memory_devices[did]['tracking_active'] = (computed_status == 'online')
+            if db is not None:
+                try:
+                    db.devices.update_one(
+                        {'device_id': did},
+                        {'$set': {'status': computed_status, 'tracking_active': (computed_status == 'online')}}
+                    )
+                except Exception:
+                    pass
+        d_copy['status'] = computed_status
+        d_copy['tracking_active'] = (computed_status == 'online')
         final_devices.append(d_copy)
 
     final_devices.sort(key=lambda x: x.get('last_seen', ''), reverse=True)
@@ -382,10 +436,12 @@ def update_device(device_id: str, updates: dict) -> dict:
 
     now = datetime.utcnow().isoformat() + 'Z'
     existing['updated_at'] = now
-    if existing.get('is_offline_forced'):
+    if existing.get('is_offline_forced') or existing.get('tracking_active') is False or updates.get('status') == 'offline':
         existing['status'] = 'offline'
+        existing['tracking_active'] = False
     else:
         existing['status'] = compute_device_status(existing)
+        existing['tracking_active'] = (existing['status'] == 'online')
 
     in_memory_devices[device_id] = existing
 

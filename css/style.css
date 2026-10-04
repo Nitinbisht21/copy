@@ -2207,6 +2207,24 @@ input:checked + .slider:before {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
+.real-device-map-marker.offline .device-marker-pulse {
+  display: none !important;
+  animation: none !important;
+}
+
+.real-device-map-marker.offline .device-marker-core {
+  background: #94a3b8 !important;
+  opacity: 0.7;
+  border-color: #cbd5e1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4) !important;
+}
+
+.real-device-map-marker.offline .device-marker-label {
+  opacity: 0.75;
+  background: rgba(30, 41, 59, 0.85);
+  border-color: rgba(148, 163, 184, 0.3);
+}
+
 /* Leaflet Popup Styling for Real Devices */
 .device-popup-card {
   font-family: var(--font-sans);

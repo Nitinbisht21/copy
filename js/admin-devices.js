@@ -157,6 +157,7 @@
     }
 
     evaluateDeviceGeofence(device) {
+      const status = device.status || 'offline';
       const lastLoc = device.last_location;
       const isOutside = Boolean(
         device.outside_fence ||
@@ -164,6 +165,13 @@
         (lastLoc && (lastLoc.outside_fence || lastLoc.flagged)) ||
         (device.current_fence && device.current_fence.includes('Outside'))
       );
+
+      if (status === 'offline') {
+        if (isOutside) {
+          return '⚪ Offline (Last: Outside Fence)';
+        }
+        return '⚪ Offline (Tracking Stopped)';
+      }
 
       if (isOutside) {
         const dist = Math.round(device.distance_outside || (lastLoc && lastLoc.distance_outside) || 0);
@@ -279,16 +287,16 @@
     }
 
     getDeviceMarkerColor(device, index = 0) {
+      const status = device.status || 'offline';
+      if (status === 'offline') return '#94a3b8'; // Offline devices always grey!
+
       const isOutside = Boolean(
         device.outside_fence ||
         device.flagged ||
         (device.last_location && (device.last_location.outside_fence || device.last_location.flagged)) ||
         (device.current_fence && device.current_fence.includes('Outside'))
       );
-      if (isOutside) return '#ef4444'; // Red flagged marker when outside fence!
-
-      const status = device.status || 'offline';
-      if (status === 'offline') return '#94a3b8';
+      if (isOutside) return '#ef4444'; // Red flagged marker when active and outside fence!
 
       const FLEET_PALETTE = ['#10b981', '#3b82f6', '#8b5cf6', '#f97316', '#06b6d4', '#ec4899', '#14b8a6', '#eab308'];
       let num = device.device_number || (index + 1);
@@ -367,9 +375,13 @@
           }
 
           if (accCircle) {
-            accCircle.setLatLng(latlng);
-            if (loc.accuracy) accCircle.setRadius(loc.accuracy);
-            accCircle.setStyle({ color: color, fillColor: color });
+            if (status === 'offline') {
+              accCircle.setStyle({ opacity: 0, fillOpacity: 0 });
+            } else {
+              accCircle.setLatLng(latlng);
+              if (loc.accuracy) accCircle.setRadius(loc.accuracy);
+              accCircle.setStyle({ color: color, fillColor: color, opacity: 0.4, fillOpacity: 0.1 });
+            }
           }
         }
       });
