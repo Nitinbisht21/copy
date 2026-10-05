@@ -200,7 +200,7 @@
             if (!timer) {
               timer = setInterval(function() {
                 self.postMessage('tick');
-              }, 15000); // tick every 15 seconds
+              }, 5000); // tick every 5 seconds for reliable background tracking
             }
           } else if (e.data === 'stop') {
             if (timer) {
@@ -668,9 +668,18 @@
             this.forceImmediateSync = true;
           }
         } else {
-          // User switched to another tab, minimized browser, or opened another app: mark OFFLINE immediately
-          this.stopPresenceHeartbeat();
-          this.sendPresence('offline', false);
+          // Tab is minimized, screen off, or user switched apps/tabs:
+          if (this.isTracking) {
+            // LOCATION TRACKING IS ON: Continue background tracking!
+            this.audioKeeper.start();
+            if (this.worker) this.worker.postMessage('start');
+            // Keep sending presence heartbeats in background!
+            this.sendPresence('online', true);
+          } else {
+            // LOCATION TRACKING IS OFF: Mark offline immediately as user left the page
+            this.stopPresenceHeartbeat();
+            this.sendPresence('offline', false);
+          }
         }
       });
 
@@ -682,7 +691,7 @@
       });
 
       window.addEventListener('blur', () => {
-        if (document.hidden) {
+        if (!this.isTracking && document.hidden) {
           this.stopPresenceHeartbeat();
           this.sendPresence('offline', false);
         }
@@ -786,7 +795,7 @@
 
     sendPresence(status, isTabActive = true) {
       if (!this.deviceId) return;
-      const isOnline = (status === 'online' && isTabActive);
+      const isOnline = (status === 'online' && (isTabActive || this.isTracking));
       const payload = JSON.stringify({
         client_uuid: this.clientUuid,
         status: isOnline ? 'online' : 'offline',
@@ -1052,21 +1061,21 @@
       }
     }
 
-    // Background worker heartbeat called every 15s to keep device alive
+    // Background worker heartbeat called every 5s to keep device alive and tracking
     async handleBackgroundHeartbeat() {
       if (!this.isTracking) return;
 
       const now = Date.now();
 
-      // 1. If tab is in background, re-assert audio keep-alive (only fetch GPS if not already cached)
+      // 1. If tab is in background, re-assert audio keep-alive and fetch fresh GPS fix
       if (document.visibilityState === 'hidden') {
         this.audioKeeper.start();
-        if (!this.lastPosition && navigator.geolocation) {
+        if (navigator.geolocation) {
           try {
             navigator.geolocation.getCurrentPosition(
               (pos) => this.handlePosition(pos),
               () => {},
-              { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+              { enableHighAccuracy: true, maximumAge: 4000, timeout: 8000 }
             );
           } catch (e) {}
         }
@@ -1078,8 +1087,8 @@
 
       if (this.lastPosition && this.lastPosition.latitude && timeSinceTelemetry >= TELEMETRY_INTERVAL_MS) {
         await this.sendTelemetry(this.lastPosition);
-      } else if (this.deviceId && timeSinceTelemetry > 25000 && timeSincePing > 25000) {
-        // 3. Heartbeat ping: Keep device ONLINE on server
+      } else if (this.deviceId && (timeSinceTelemetry > 6000 || timeSincePing > 6000)) {
+        // 3. Heartbeat ping every 6s: Keep device ONLINE on server
         this.lastPingSendTime = now;
         try {
           await fetch(API.PING(this.deviceId), {
@@ -1088,8 +1097,10 @@
             body: JSON.stringify({
               client_uuid: this.clientUuid,
               status: 'online',
+              is_tab_active: true,
               tracking_active: true
-            })
+            }),
+            keepalive: true
           });
         } catch (e) {}
       }
