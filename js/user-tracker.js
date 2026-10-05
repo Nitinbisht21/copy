@@ -818,20 +818,21 @@
         if (isOnline) {
           this.statusPulse.className = 'pulse-dot active';
           this.statusLabel.textContent = 'Live Tracking Active';
+          this.networkStatus.textContent = 'Online';
         } else {
           this.statusPulse.className = 'pulse-dot offline';
-          this.statusLabel.textContent = 'Device Offline (Working on another page)';
-          this.networkStatus.textContent = 'Offline • Paused while working on another page';
+          this.statusLabel.textContent = 'Offline';
+          this.networkStatus.textContent = 'Offline';
         }
       } else {
         if (isOnline) {
           this.statusPulse.className = 'pulse-dot active';
-          this.statusLabel.textContent = 'Device Online (Ready)';
-          this.networkStatus.textContent = 'Device Online • Page Active (Click Start to Track)';
+          this.statusLabel.textContent = 'Online';
+          this.networkStatus.textContent = 'Online';
         } else {
           this.statusPulse.className = 'pulse-dot offline';
-          this.statusLabel.textContent = 'Device Offline (Working on another page)';
-          this.networkStatus.textContent = 'Offline • Tab in background';
+          this.statusLabel.textContent = 'Offline';
+          this.networkStatus.textContent = 'Offline';
         }
       }
     }
@@ -1023,9 +1024,7 @@
       if (this.pipTracker) this.pipTracker.stop();
 
       this.updateUIState('stopped');
-      this.networkStatus.textContent = reason || (isPageActive
-        ? 'GPS Tracking Stopped • Device Online (Ready)'
-        : 'Tracking Stopped • Device Offline');
+      this.networkStatus.textContent = reason || (isPageActive ? 'Online' : 'Offline');
       if (this.statSyncCountdown) {
         this.statSyncCountdown.textContent = 'Next upload: Standby';
         this.statSyncCountdown.style.color = '#94a3b8';
@@ -1366,7 +1365,7 @@
       } else {
         const isPageActive = (document.visibilityState === 'visible');
         this.statusPulse.className = isPageActive ? 'pulse-dot active' : 'pulse-dot offline';
-        this.statusLabel.textContent = isPageActive ? 'Device Online (Ready)' : 'Offline (Working on another page)';
+        this.statusLabel.textContent = isPageActive ? 'Online' : 'Offline';
         this.btnToggleTrack.className = 'btn-track';
         this.btnTrackText.textContent = 'Start GPS Tracking';
         this.btnTrackIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';

@@ -426,6 +426,7 @@ def process_telemetry(payload: dict, active_fences: list = None) -> tuple:
         'status': 'online',
         'tracking_active': True,
         'is_offline_forced': False,
+        'is_tab_active': True,
         'offline_reason': None,
         'outside_fence': is_outside_fence,
         'flagged': is_outside_fence,
