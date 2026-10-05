@@ -11,40 +11,75 @@ import re
 import uuid
 import math
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from services.db import get_tracking_db, in_memory_devices, in_memory_locations, use_mongodb
 
 GENERIC_NAMES = {'mobile device', 'mobile phone', 'device', 'phone', 'anonymous', 'anon'}
 
+# Mobile devices and web panels send presence heartbeats every 5s while tab is active.
+# If no signal or heartbeat received in 15s, device is automatically computed as OFFLINE.
+ONLINE_HEARTBEAT_TIMEOUT_SECONDS = 15
+
+def parse_iso_timestamp(ts) -> datetime:
+    """Safely parses ISO timestamp into UTC-aware datetime."""
+    if not ts:
+        return None
+    try:
+        s = str(ts).strip()
+        if s.endswith('Z'):
+            s = s[:-1] + '+00:00'
+        if '+' not in s and '-' not in s[10:]:
+            s += '+00:00'
+        return datetime.fromisoformat(s)
+    except Exception:
+        for fmt in ('%Y-%m-%dT%H:%M:%S.%f%z', '%Y-%m-%dT%H:%M:%S%z', '%Y-%m-%dT%H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S'):
+            try:
+                dt = datetime.strptime(str(ts).strip().rstrip('Z'), fmt)
+                return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+            except Exception:
+                continue
+    return None
+
 def compute_device_status(device: dict) -> str:
     """
-    Computes device status strictly without any time thresholds.
+    Computes device status strictly without intermediate 'inactive' thresholds.
     Only two states exist:
-      - 'online': when device is active (tracking and sharing location)
-      - 'offline': when device is stopped, not sharing location, or offline
+      - 'online': when user is on the page, tab is active, and sending presence heartbeats (last_seen <= 15s)
+      - 'offline': when user is on another page, tab is hidden/closed, or last_seen > 15s
     """
+    if not device:
+        return 'offline'
+
     if device.get('revoked'):
         return 'revoked'
 
-    # If tracking_active flag is explicitly set
-    if device.get('tracking_active') is False:
+    # If tab was hidden/minimized or forced offline
+    if device.get('is_offline_forced') or device.get('is_tab_active') is False:
         return 'offline'
-    if device.get('tracking_active') is True:
-        return 'online'
 
-    # Direct status attribute check
+    # If status is explicitly set to offline
     curr_status = (device.get('status') or '').lower().strip()
     if curr_status == 'offline':
         return 'offline'
-    if curr_status == 'online':
-        return 'online'
 
-    # If device has recorded location and no offline flag, it is active/online
-    if device.get('last_location'):
-        return 'online'
+    # Check last_seen timestamp against heartbeat timeout
+    last_seen_str = device.get('last_seen')
+    if not last_seen_str:
+        return 'offline'
 
-    return 'offline'
+    last_dt = parse_iso_timestamp(last_seen_str)
+    if not last_dt:
+        return 'offline'
+
+    now_utc = datetime.now(timezone.utc)
+    diff_sec = (now_utc - last_dt).total_seconds()
+
+    # If device stopped communicating for more than 15 seconds, it is OFFLINE
+    if diff_sec > ONLINE_HEARTBEAT_TIMEOUT_SECONDS:
+        return 'offline'
+
+    return 'online'
 
 def _is_generic_name(name: str) -> bool:
     """Checks if a name is a generic placeholder or default auto-name."""
@@ -178,6 +213,7 @@ def register_device(
         existing['platform'] = plat
         existing['revoked'] = False
         existing['is_offline_forced'] = False
+        existing['is_tab_active'] = True
         if cu:
             existing['client_uuid'] = cu
         if fingerprint:
@@ -220,6 +256,8 @@ def register_device(
         'fingerprint': fingerprint,
         'client_ip': client_ip,
         'status': 'online',
+        'is_tab_active': True,
+        'tracking_active': False,
         'is_offline_forced': False,
         'offline_reason': None,
         'distance_outside': 0.0,
@@ -266,7 +304,9 @@ def get_device(device_id: str) -> dict:
 
     if dev:
         dev_copy = dict(dev)
-        dev_copy['status'] = compute_device_status(dev_copy)
+        computed_status = compute_device_status(dev_copy)
+        dev_copy['status'] = computed_status
+        dev_copy['tracking_active'] = (computed_status == 'online')
         return dev_copy
     return None
 
@@ -358,7 +398,21 @@ def list_devices(user_id: str = None, include_revoked: bool = False) -> list:
     final_devices = []
     for d in deduped:
         d_copy = dict(d)
-        d_copy['status'] = compute_device_status(d_copy)
+        computed_status = compute_device_status(d_copy)
+        if d.get('status') != computed_status:
+            d['status'] = computed_status
+            did = d.get('device_id')
+            if did and did in in_memory_devices:
+                in_memory_devices[did]['status'] = computed_status
+            if db is not None:
+                try:
+                    db.devices.update_one(
+                        {'device_id': did},
+                        {'$set': {'status': computed_status}}
+                    )
+                except Exception:
+                    pass
+        d_copy['status'] = computed_status
         final_devices.append(d_copy)
 
     final_devices.sort(key=lambda x: x.get('last_seen', ''), reverse=True)
@@ -374,7 +428,8 @@ def update_device(device_id: str, updates: dict) -> dict:
         'device_name', 'platform', 'revoked', 'last_seen', 'last_location',
         'current_fence', 'status', 'is_offline_forced', 'offline_reason',
         'distance_outside', 'tracking_active', 'fingerprint', 'client_ip',
-        'device_number', 'client_uuid', 'outside_fence', 'flagged', 'flag'
+        'device_number', 'client_uuid', 'outside_fence', 'flagged', 'flag',
+        'is_tab_active'
     ]
     for k in allowed_keys:
         if k in updates:
@@ -382,7 +437,7 @@ def update_device(device_id: str, updates: dict) -> dict:
 
     now = datetime.utcnow().isoformat() + 'Z'
     existing['updated_at'] = now
-    if existing.get('is_offline_forced'):
+    if existing.get('is_offline_forced') or existing.get('is_tab_active') is False or updates.get('status') == 'offline':
         existing['status'] = 'offline'
     else:
         existing['status'] = compute_device_status(existing)
@@ -400,22 +455,45 @@ def update_device(device_id: str, updates: dict) -> dict:
 
     return existing
 
-def ping_device(device_id: str, client_ip: str = None, status: str = 'online', tracking_active: bool = True) -> dict:
+def ping_device(
+    device_id: str,
+    client_ip: str = None,
+    status: str = 'online',
+    tracking_active: bool = None,
+    is_tab_active: bool = True,
+    client_uuid: str = None
+) -> dict:
     """
-    Heartbeat / state update from mobile device.
-    Keeps device ONLINE when tracking is active, or sets OFFLINE when tracking is stopped.
+    Heartbeat / state update from mobile device or web panel.
+    - When user is ON the page (is_tab_active=True, status='online'): device is ONLINE.
+    - When user is on another page, minimizes, closes tab/browser: device is OFFLINE.
     """
     dev = get_device(device_id)
+    if not dev and client_uuid:
+        dev = find_existing_device(client_uuid=client_uuid)
+        if dev:
+            device_id = dev['device_id']
+
     if not dev or dev.get('revoked'):
         return None
+
     now = datetime.utcnow().isoformat() + 'Z'
     updates = {'last_seen': now}
     if client_ip:
         updates['client_ip'] = client_ip
 
-    is_online = (status == 'online' and tracking_active)
-    updates['status'] = 'online' if is_online else 'offline'
-    updates['tracking_active'] = is_online
+    is_online = (status == 'online' and is_tab_active is not False)
+    if is_online:
+        updates['status'] = 'online'
+        updates['is_offline_forced'] = False
+        updates['is_tab_active'] = True
+    else:
+        updates['status'] = 'offline'
+        updates['is_offline_forced'] = True
+        updates['is_tab_active'] = False
+
+    if tracking_active is not None:
+        updates['tracking_active'] = bool(tracking_active)
 
     return update_device(device_id, updates)
 

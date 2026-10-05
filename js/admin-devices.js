@@ -157,6 +157,7 @@
     }
 
     evaluateDeviceGeofence(device) {
+      const status = device.status || 'offline';
       const lastLoc = device.last_location;
       const isOutside = Boolean(
         device.outside_fence ||
@@ -165,13 +166,24 @@
         (device.current_fence && device.current_fence.includes('Outside'))
       );
 
+      if (status === 'offline') {
+        if (isOutside) {
+          return '⚪ Offline (Last: Outside Fence)';
+        }
+        return device.is_tab_active === false ? '⚪ Offline (Working on another page)' : '⚪ Offline (Disconnected)';
+      }
+
       if (isOutside) {
         const dist = Math.round(device.distance_outside || (lastLoc && lastLoc.distance_outside) || 0);
         return `🚩 Outside (${dist}m - Flagged)`;
       }
 
       if (!lastLoc || typeof lastLoc.latitude !== 'number' || typeof lastLoc.longitude !== 'number') {
-        return 'No GPS Fix';
+        return '🟢 Online (Page Active - GPS Standby)';
+      }
+
+      if (device.tracking_active === false) {
+        return `🟢 Online (Page Active • GPS Standby)`;
       }
 
       // Check current geofences from active map store
@@ -211,16 +223,25 @@
       }
 
       if (this.devices.length === 0) {
-        this.deviceListContainer.innerHTML = `
-          <div class="empty-hint" style="font-size: 0.74rem; text-align: center; padding: 1rem 0.5rem;">
-            No devices connected yet.<br>
-            <button type="button" class="btn-connect-sm" onclick="window.adminDeviceManager.openConnectModal()" style="margin-top: 0.5rem;">
-              + Connect Phone
-            </button>
-          </div>
-        `;
+        if (this._lastListHash !== 'empty') {
+          this._lastListHash = 'empty';
+          this.deviceListContainer.innerHTML = `
+            <div class="empty-hint" style="font-size: 0.74rem; text-align: center; padding: 1rem 0.5rem;">
+              No devices connected yet.<br>
+              <button type="button" class="btn-connect-sm" onclick="window.adminDeviceManager.openConnectModal()" style="margin-top: 0.5rem;">
+                + Connect Phone
+              </button>
+            </div>
+          `;
+        }
         return;
       }
+
+      const listHash = this.devices.map(d => `${d.device_id}_${d.status}_${(d.last_location&&d.last_location.latitude)||0}_${(d.last_location&&d.last_location.longitude)||0}_${d.device_name}_${d.current_fence}_${this.activeHistoryDeviceId === d.device_id}`).join('|');
+      if (this._lastListHash === listHash) {
+        return;
+      }
+      this._lastListHash = listHash;
 
       this.deviceListContainer.innerHTML = this.devices
         .map((device) => {
@@ -279,16 +300,16 @@
     }
 
     getDeviceMarkerColor(device, index = 0) {
+      const status = device.status || 'offline';
+      if (status === 'offline') return '#94a3b8'; // Offline devices always grey!
+
       const isOutside = Boolean(
         device.outside_fence ||
         device.flagged ||
         (device.last_location && (device.last_location.outside_fence || device.last_location.flagged)) ||
         (device.current_fence && device.current_fence.includes('Outside'))
       );
-      if (isOutside) return '#ef4444'; // Red flagged marker when outside fence!
-
-      const status = device.status || 'offline';
-      if (status === 'offline') return '#94a3b8';
+      if (isOutside) return '#ef4444'; // Red flagged marker when active and outside fence!
 
       const FLEET_PALETTE = ['#10b981', '#3b82f6', '#8b5cf6', '#f97316', '#06b6d4', '#ec4899', '#14b8a6', '#eab308'];
       let num = device.device_number || (index + 1);
@@ -333,6 +354,11 @@
 
           marker = L.marker(latlng, { icon, zIndexOffset: 800 }).addTo(this.realDevicesLayer);
           marker.bindPopup(() => this.generateDevicePopup(device));
+          marker._vf_last_lat = loc.latitude;
+          marker._vf_last_lng = loc.longitude;
+          marker._vf_last_status = status;
+          marker._vf_last_color = color;
+          marker._vf_last_label = labelText;
           this.deviceMarkers.set(device.device_id, marker);
 
           // Accuracy radius circle if available
@@ -348,28 +374,44 @@
             this.accuracyCircles.set(device.device_id, accCircle);
           }
         } else {
-          // Smoothly update location
-          marker.setLatLng(latlng);
-          marker.setIcon(
-            L.divIcon({
-              className: `real-device-map-marker ${status}`,
-              html: `
-                <div class="device-marker-pulse" style="background:${color}; box-shadow:0 0 10px ${color}"></div>
-                <div class="device-marker-core" style="background:${color}"></div>
-                <div class="device-marker-label">${this.escape(labelText)}</div>
-              `,
-              iconSize: [28, 28],
-              iconAnchor: [14, 14]
-            })
-          );
+          // Only update position if changed
+          if (marker._vf_last_lat !== loc.latitude || marker._vf_last_lng !== loc.longitude) {
+            marker.setLatLng(latlng);
+            marker._vf_last_lat = loc.latitude;
+            marker._vf_last_lng = loc.longitude;
+          }
+
+          // Only update icon if appearance changed
+          if (marker._vf_last_status !== status || marker._vf_last_color !== color || marker._vf_last_label !== labelText) {
+            marker._vf_last_status = status;
+            marker._vf_last_color = color;
+            marker._vf_last_label = labelText;
+            marker.setIcon(
+              L.divIcon({
+                className: `real-device-map-marker ${status}`,
+                html: `
+                  <div class="device-marker-pulse" style="background:${color}; box-shadow:0 0 10px ${color}"></div>
+                  <div class="device-marker-core" style="background:${color}"></div>
+                  <div class="device-marker-label">${this.escape(labelText)}</div>
+                `,
+                iconSize: [28, 28],
+                iconAnchor: [14, 14]
+              })
+            );
+          }
+
           if (marker.isPopupOpen()) {
             marker.setPopupContent(this.generateDevicePopup(device));
           }
 
           if (accCircle) {
-            accCircle.setLatLng(latlng);
-            if (loc.accuracy) accCircle.setRadius(loc.accuracy);
-            accCircle.setStyle({ color: color, fillColor: color });
+            if (status === 'offline') {
+              accCircle.setStyle({ opacity: 0, fillOpacity: 0 });
+            } else {
+              accCircle.setLatLng(latlng);
+              if (loc.accuracy) accCircle.setRadius(loc.accuracy);
+              accCircle.setStyle({ color: color, fillColor: color, opacity: 0.4, fillOpacity: 0.1 });
+            }
           }
         }
       });
