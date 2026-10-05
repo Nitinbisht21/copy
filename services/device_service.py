@@ -17,9 +17,9 @@ from services.db import get_tracking_db, in_memory_devices, in_memory_locations,
 
 GENERIC_NAMES = {'mobile device', 'mobile phone', 'device', 'phone', 'anonymous', 'anon'}
 
-# Mobile devices send heartbeats/telemetry every 5-8s.
-# 30-second watchdog timeout allows mobile background CPU power scheduling without false disconnects.
-ONLINE_HEARTBEAT_TIMEOUT_SECONDS = 30
+# Mobile devices send heartbeats/telemetry every 5s.
+# 15-second watchdog timeout allows rapid detection when webpage is killed or closed from device.
+ONLINE_HEARTBEAT_TIMEOUT_SECONDS = 15
 
 def parse_iso_timestamp(ts) -> datetime:
     """Safely parses ISO timestamp into UTC-aware datetime."""
@@ -45,8 +45,8 @@ def compute_device_status(device: dict) -> str:
     """
     Computes device status strictly without intermediate 'inactive' thresholds.
     Only two states exist:
-      - 'online': active tracking in foreground/background, or active on page (last_seen <= 30s)
-      - 'offline': stopped, tab closed/switched away without tracking, or last_seen > 30s
+      - 'online': webpage open on device (foreground, hidden, or switched) with active heartbeats/tracking (last_seen <= 15s)
+      - 'offline': killed/closed from device (unload beacon or last_seen > 15s)
     """
     if not device:
         return 'offline'
@@ -54,30 +54,12 @@ def compute_device_status(device: dict) -> str:
     if device.get('revoked'):
         return 'revoked'
 
-    # If status is explicitly set to offline or forced offline
+    # If status is explicitly set to offline or forced offline (e.g. from page close beacon)
     if device.get('is_offline_forced'):
         return 'offline'
 
     curr_status = (device.get('status') or '').lower().strip()
     if curr_status == 'offline':
-        return 'offline'
-
-    # 1. When GPS tracking is active, the device tracks continuously in the background!
-    if device.get('tracking_active'):
-        last_seen_str = device.get('last_seen')
-        if not last_seen_str:
-            return 'offline'
-        last_dt = parse_iso_timestamp(last_seen_str)
-        if not last_dt:
-            return 'offline'
-        now_utc = datetime.now(timezone.utc)
-        diff_sec = (now_utc - last_dt).total_seconds()
-        if diff_sec > ONLINE_HEARTBEAT_TIMEOUT_SECONDS:
-            return 'offline'
-        return 'online'
-
-    # 2. When GPS tracking is OFF: Tab presence dictates status (Online on page, Offline when away)
-    if device.get('is_tab_active') is False:
         return 'offline'
 
     last_seen_str = device.get('last_seen')
@@ -452,7 +434,7 @@ def update_device(device_id: str, updates: dict) -> dict:
 
     now = datetime.utcnow().isoformat() + 'Z'
     existing['updated_at'] = now
-    if existing.get('is_offline_forced') or (not existing.get('tracking_active') and existing.get('is_tab_active') is False) or updates.get('status') == 'offline':
+    if existing.get('is_offline_forced') or updates.get('status') == 'offline':
         existing['status'] = 'offline'
     else:
         existing['status'] = compute_device_status(existing)
@@ -480,8 +462,8 @@ def ping_device(
 ) -> dict:
     """
     Heartbeat / state update from mobile device or web panel.
-    - When GPS tracking is active (tracking_active=True): device tracks and stays ONLINE in background.
-    - When tracking is OFF: presence dictates status (ONLINE on page, OFFLINE when tab is hidden).
+    - When webpage is alive on device (foreground, background, hidden, or switched): stays ONLINE.
+    - Only marks OFFLINE when page is killed/closed or when status is explicitly 'offline'.
     """
     dev = get_device(device_id)
     if not dev and client_uuid:
@@ -499,29 +481,16 @@ def ping_device(
 
     if tracking_active is not None:
         updates['tracking_active'] = bool(tracking_active)
-        is_tracking = bool(tracking_active)
-    else:
-        is_tracking = bool(dev.get('tracking_active', False))
 
     if status == 'offline':
         updates['status'] = 'offline'
         updates['is_offline_forced'] = True
         updates['is_tab_active'] = False
-    elif is_tracking:
-        # Background GPS tracking is ON: keep device ONLINE in background!
-        updates['status'] = 'online'
-        updates['is_offline_forced'] = False
-        updates['is_tab_active'] = bool(is_tab_active)
-    elif is_tab_active:
-        # Tracking is OFF, but user is on page: ONLINE
+    else:
+        # Webpage is running on device (foreground, hidden, or switched tab): ONLINE
         updates['status'] = 'online'
         updates['is_offline_forced'] = False
         updates['is_tab_active'] = True
-    else:
-        # Tracking is OFF and user is away: OFFLINE
-        updates['status'] = 'offline'
-        updates['is_offline_forced'] = True
-        updates['is_tab_active'] = False
 
     return update_device(device_id, updates)
 
