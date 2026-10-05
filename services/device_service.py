@@ -17,8 +17,8 @@ from services.db import get_tracking_db, in_memory_devices, in_memory_locations,
 
 GENERIC_NAMES = {'mobile device', 'mobile phone', 'device', 'phone', 'anonymous', 'anon'}
 
-# Mobile devices and web panels send presence heartbeats every 5s while tab is active.
-# If no signal or heartbeat received in 15s, device is automatically computed as OFFLINE.
+# Mobile devices send heartbeats/telemetry every 5s.
+# 15-second watchdog timeout allows rapid detection when webpage is killed or closed from device.
 ONLINE_HEARTBEAT_TIMEOUT_SECONDS = 15
 
 def parse_iso_timestamp(ts) -> datetime:
@@ -45,8 +45,8 @@ def compute_device_status(device: dict) -> str:
     """
     Computes device status strictly without intermediate 'inactive' thresholds.
     Only two states exist:
-      - 'online': when user is on the page, tab is active, and sending presence heartbeats (last_seen <= 15s)
-      - 'offline': when user is on another page, tab is hidden/closed, or last_seen > 15s
+      - 'online': webpage open on device (foreground, hidden, or switched) with active heartbeats/tracking (last_seen <= 15s)
+      - 'offline': killed/closed from device (unload beacon or last_seen > 15s)
     """
     if not device:
         return 'offline'
@@ -54,16 +54,14 @@ def compute_device_status(device: dict) -> str:
     if device.get('revoked'):
         return 'revoked'
 
-    # If tab was hidden/minimized or forced offline
-    if device.get('is_offline_forced') or device.get('is_tab_active') is False:
+    # If status is explicitly set to offline or forced offline (e.g. from page close beacon)
+    if device.get('is_offline_forced'):
         return 'offline'
 
-    # If status is explicitly set to offline
     curr_status = (device.get('status') or '').lower().strip()
     if curr_status == 'offline':
         return 'offline'
 
-    # Check last_seen timestamp against heartbeat timeout
     last_seen_str = device.get('last_seen')
     if not last_seen_str:
         return 'offline'
@@ -75,7 +73,6 @@ def compute_device_status(device: dict) -> str:
     now_utc = datetime.now(timezone.utc)
     diff_sec = (now_utc - last_dt).total_seconds()
 
-    # If device stopped communicating for more than 15 seconds, it is OFFLINE
     if diff_sec > ONLINE_HEARTBEAT_TIMEOUT_SECONDS:
         return 'offline'
 
@@ -437,7 +434,7 @@ def update_device(device_id: str, updates: dict) -> dict:
 
     now = datetime.utcnow().isoformat() + 'Z'
     existing['updated_at'] = now
-    if existing.get('is_offline_forced') or existing.get('is_tab_active') is False or updates.get('status') == 'offline':
+    if existing.get('is_offline_forced') or updates.get('status') == 'offline':
         existing['status'] = 'offline'
     else:
         existing['status'] = compute_device_status(existing)
@@ -465,8 +462,8 @@ def ping_device(
 ) -> dict:
     """
     Heartbeat / state update from mobile device or web panel.
-    - When user is ON the page (is_tab_active=True, status='online'): device is ONLINE.
-    - When user is on another page, minimizes, closes tab/browser: device is OFFLINE.
+    - When webpage is alive on device (foreground, background, hidden, or switched): stays ONLINE.
+    - Only marks OFFLINE when page is killed/closed or when status is explicitly 'offline'.
     """
     dev = get_device(device_id)
     if not dev and client_uuid:
@@ -482,18 +479,18 @@ def ping_device(
     if client_ip:
         updates['client_ip'] = client_ip
 
-    is_online = (status == 'online' and is_tab_active is not False)
-    if is_online:
-        updates['status'] = 'online'
-        updates['is_offline_forced'] = False
-        updates['is_tab_active'] = True
-    else:
+    if tracking_active is not None:
+        updates['tracking_active'] = bool(tracking_active)
+
+    if status == 'offline':
         updates['status'] = 'offline'
         updates['is_offline_forced'] = True
         updates['is_tab_active'] = False
-
-    if tracking_active is not None:
-        updates['tracking_active'] = bool(tracking_active)
+    else:
+        # Webpage is running on device (foreground, hidden, or switched tab): ONLINE
+        updates['status'] = 'online'
+        updates['is_offline_forced'] = False
+        updates['is_tab_active'] = True
 
     return update_device(device_id, updates)
 

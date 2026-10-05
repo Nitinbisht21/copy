@@ -200,7 +200,7 @@
             if (!timer) {
               timer = setInterval(function() {
                 self.postMessage('tick');
-              }, 15000); // tick every 15 seconds
+              }, 5000); // tick every 5 seconds for reliable background tracking
             }
           } else if (e.data === 'stop') {
             if (timer) {
@@ -661,31 +661,34 @@
       // Handle Page Visibility Change (Tab switch / minimize / restore)
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
-          // User returned to this tab / page: mark ONLINE immediately
+          // User returned to foreground of this tab
           this.startPresenceHeartbeat();
           if (this.isTracking) {
             this.requestWakeLock();
             this.forceImmediateSync = true;
           }
         } else {
-          // User switched to another tab, minimized browser, or opened another app: mark OFFLINE immediately
-          this.stopPresenceHeartbeat();
-          this.sendPresence('offline', false);
+          // Tab is minimized, switched to another tab, or screen off:
+          // Keep device ONLINE in background and continue tracking!
+          if (this.isTracking) {
+            this.audioKeeper.start();
+            if (this.worker) this.worker.postMessage('start');
+          }
+          this.sendPresence('online', true);
         }
       });
 
       // Window focus / blur fallback for multi-window and desktop switching
       window.addEventListener('focus', () => {
-        if (document.visibilityState === 'visible') {
-          this.startPresenceHeartbeat();
+        this.sendPresence('online', true);
+        if (this.isTracking) {
+          this.requestWakeLock();
         }
       });
 
       window.addEventListener('blur', () => {
-        if (document.hidden) {
-          this.stopPresenceHeartbeat();
-          this.sendPresence('offline', false);
-        }
+        // Tab/window lost focus - device stays ONLINE!
+        this.sendPresence('online', true);
       });
 
       // Re-acquire Screen Wake Lock on user touch/click
@@ -705,6 +708,8 @@
       const sendOfflineBeacon = () => {
         if (!this.deviceId) return;
         this.stopPresenceHeartbeat();
+        if (this.worker) this.worker.postMessage('stop');
+        this.audioKeeper.stop();
         const payload = JSON.stringify({
           client_uuid: this.clientUuid,
           status: 'offline',
@@ -766,14 +771,17 @@
       this.stopPresenceHeartbeat();
       if (!this.deviceId) return;
 
+      // Ensure background Web Worker is active so heartbeats and tracking never throttle when tab is hidden
+      if (this.worker) {
+        this.worker.postMessage('start');
+      }
+
       // Immediate online presence ping
       this.sendPresence('online', true);
 
-      // 5-second presence heartbeat while page is active and visible
+      // 5-second presence heartbeat timer
       this._presenceInterval = setInterval(() => {
-        if (document.visibilityState === 'visible') {
-          this.sendPresence('online', true);
-        }
+        this.sendPresence('online', true);
       }, 5000);
     }
 
@@ -786,11 +794,11 @@
 
     sendPresence(status, isTabActive = true) {
       if (!this.deviceId) return;
-      const isOnline = (status === 'online' && isTabActive);
+      const isOnline = (status === 'online');
       const payload = JSON.stringify({
         client_uuid: this.clientUuid,
         status: isOnline ? 'online' : 'offline',
-        is_tab_active: isTabActive,
+        is_tab_active: true,
         tracking_active: Boolean(this.isTracking)
       });
       const url = API.PING(this.deviceId);
@@ -1007,10 +1015,9 @@
       this.lastTelemetrySendTime = 0;
       this.isOfflineDueToFence = false;
 
-      // When stopping GPS tracking, device stays ONLINE if user is on this page!
-      const isPageActive = (document.visibilityState === 'visible');
+      // When stopping GPS tracking, device stays ONLINE as long as webpage is open on device
       if (this.deviceId) {
-        this.sendPresence(isPageActive ? 'online' : 'offline', isPageActive);
+        this.sendPresence('online', true);
       }
 
       if (this.watchId !== null) {
@@ -1020,11 +1027,10 @@
 
       this.releaseWakeLock();
       this.audioKeeper.stop();
-      if (this.worker) this.worker.postMessage('stop');
       if (this.pipTracker) this.pipTracker.stop();
 
       this.updateUIState('stopped');
-      this.networkStatus.textContent = reason || (isPageActive ? 'Online' : 'Offline');
+      this.networkStatus.textContent = reason || 'Online (Tracking Standby)';
       if (this.statSyncCountdown) {
         this.statSyncCountdown.textContent = 'Next upload: Standby';
         this.statSyncCountdown.style.color = '#94a3b8';
@@ -1052,49 +1058,56 @@
       }
     }
 
-    // Background worker heartbeat called every 15s to keep device alive
+    // Background worker heartbeat called every 5s to keep device alive and tracking
     async handleBackgroundHeartbeat() {
-      if (!this.isTracking) return;
-
       const now = Date.now();
 
-      // 1. If tab is in background, re-assert audio keep-alive (only fetch GPS if not already cached)
-      if (document.visibilityState === 'hidden') {
-        this.audioKeeper.start();
-        if (!this.lastPosition && navigator.geolocation) {
+      // If tracking is active, ensure audio keeper is running and fetch fresh GPS coordinates
+      if (this.isTracking) {
+        if (document.visibilityState === 'hidden') {
+          this.audioKeeper.start();
+          if (navigator.geolocation) {
+            try {
+              navigator.geolocation.getCurrentPosition(
+                (pos) => this.handlePosition(pos),
+                () => {},
+                { enableHighAccuracy: true, maximumAge: 4000, timeout: 8000 }
+              );
+            } catch (e) {}
+          }
+        }
+
+        // Check 2-minute database cadence while hidden: If 2 minutes elapsed, send current coordinates
+        const timeSinceTelemetry = now - this.lastTelemetrySendTime;
+        const timeSincePing = now - this.lastPingSendTime;
+
+        if (this.lastPosition && this.lastPosition.latitude && timeSinceTelemetry >= TELEMETRY_INTERVAL_MS) {
+          await this.sendTelemetry(this.lastPosition);
+        } else if (this.deviceId && (timeSinceTelemetry > 5000 || timeSincePing > 5000)) {
+          // Heartbeat ping every 5s: Keep device ONLINE on server
+          this.lastPingSendTime = now;
           try {
-            navigator.geolocation.getCurrentPosition(
-              (pos) => this.handlePosition(pos),
-              () => {},
-              { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
-            );
+            await fetch(API.PING(this.deviceId), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                client_uuid: this.clientUuid,
+                status: 'online',
+                is_tab_active: true,
+                tracking_active: true
+              }),
+              keepalive: true
+            });
           } catch (e) {}
+        }
+      } else {
+        // When not tracking, send presence heartbeat ping every 5s to keep device ONLINE while webpage is open
+        if (this.deviceId) {
+          this.sendPresence('online', true);
         }
       }
 
-      // 2. Check 2-minute database cadence while hidden: If 2 minutes elapsed, send current coordinates
-      const timeSinceTelemetry = now - this.lastTelemetrySendTime;
-      const timeSincePing = now - this.lastPingSendTime;
-
-      if (this.lastPosition && this.lastPosition.latitude && timeSinceTelemetry >= TELEMETRY_INTERVAL_MS) {
-        await this.sendTelemetry(this.lastPosition);
-      } else if (this.deviceId && timeSinceTelemetry > 25000 && timeSincePing > 25000) {
-        // 3. Heartbeat ping: Keep device ONLINE on server
-        this.lastPingSendTime = now;
-        try {
-          await fetch(API.PING(this.deviceId), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              client_uuid: this.clientUuid,
-              status: 'online',
-              tracking_active: true
-            })
-          });
-        } catch (e) {}
-      }
-
-      // 4. Flush offline queue if any
+      // Flush offline queue if any
       if (this.offlineQueue.length > 0 && navigator.onLine) {
         this.flushOfflineQueue();
       }
@@ -1363,9 +1376,8 @@
         this.btnToggleTrack.className = 'btn-track loading';
         this.btnTrackText.textContent = 'Connecting GPS...';
       } else {
-        const isPageActive = (document.visibilityState === 'visible');
-        this.statusPulse.className = isPageActive ? 'pulse-dot active' : 'pulse-dot offline';
-        this.statusLabel.textContent = isPageActive ? 'Online' : 'Offline';
+        this.statusPulse.className = 'pulse-dot active';
+        this.statusLabel.textContent = 'Online';
         this.btnToggleTrack.className = 'btn-track';
         this.btnTrackText.textContent = 'Start GPS Tracking';
         this.btnTrackIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';
