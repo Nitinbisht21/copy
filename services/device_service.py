@@ -17,9 +17,9 @@ from services.db import get_tracking_db, in_memory_devices, in_memory_locations,
 
 GENERIC_NAMES = {'mobile device', 'mobile phone', 'device', 'phone', 'anonymous', 'anon'}
 
-# Mobile devices send heartbeats every 15-25s.
-# If no signal or location received in 45s, device is automatically computed as OFFLINE.
-ONLINE_HEARTBEAT_TIMEOUT_SECONDS = 45
+# Mobile devices and web panels send presence heartbeats every 5s while tab is active.
+# If no signal or heartbeat received in 15s, device is automatically computed as OFFLINE.
+ONLINE_HEARTBEAT_TIMEOUT_SECONDS = 15
 
 def parse_iso_timestamp(ts) -> datetime:
     """Safely parses ISO timestamp into UTC-aware datetime."""
@@ -45,8 +45,8 @@ def compute_device_status(device: dict) -> str:
     """
     Computes device status strictly without intermediate 'inactive' thresholds.
     Only two states exist:
-      - 'online': when device is active, tracking, and sending heartbeats (last_seen <= 45s)
-      - 'offline': when device is stopped, GPS is disabled, disconnected, or last_seen > 45s
+      - 'online': when user is on the page, tab is active, and sending presence heartbeats (last_seen <= 15s)
+      - 'offline': when user is on another page, tab is hidden/closed, or last_seen > 15s
     """
     if not device:
         return 'offline'
@@ -54,11 +54,11 @@ def compute_device_status(device: dict) -> str:
     if device.get('revoked'):
         return 'revoked'
 
-    # If tracking was explicitly stopped or forced offline
-    if device.get('is_offline_forced') or device.get('tracking_active') is False:
+    # If tab was hidden/minimized or forced offline
+    if device.get('is_offline_forced') or device.get('is_tab_active') is False:
         return 'offline'
 
-    # If status is set to offline
+    # If status is explicitly set to offline
     curr_status = (device.get('status') or '').lower().strip()
     if curr_status == 'offline':
         return 'offline'
@@ -75,7 +75,7 @@ def compute_device_status(device: dict) -> str:
     now_utc = datetime.now(timezone.utc)
     diff_sec = (now_utc - last_dt).total_seconds()
 
-    # If device stopped communicating for more than 45 seconds, it is OFFLINE
+    # If device stopped communicating for more than 15 seconds, it is OFFLINE
     if diff_sec > ONLINE_HEARTBEAT_TIMEOUT_SECONDS:
         return 'offline'
 
@@ -213,6 +213,7 @@ def register_device(
         existing['platform'] = plat
         existing['revoked'] = False
         existing['is_offline_forced'] = False
+        existing['is_tab_active'] = True
         if cu:
             existing['client_uuid'] = cu
         if fingerprint:
@@ -255,6 +256,8 @@ def register_device(
         'fingerprint': fingerprint,
         'client_ip': client_ip,
         'status': 'online',
+        'is_tab_active': True,
+        'tracking_active': False,
         'is_offline_forced': False,
         'offline_reason': None,
         'distance_outside': 0.0,
@@ -398,21 +401,18 @@ def list_devices(user_id: str = None, include_revoked: bool = False) -> list:
         computed_status = compute_device_status(d_copy)
         if d.get('status') != computed_status:
             d['status'] = computed_status
-            d['tracking_active'] = (computed_status == 'online')
             did = d.get('device_id')
             if did and did in in_memory_devices:
                 in_memory_devices[did]['status'] = computed_status
-                in_memory_devices[did]['tracking_active'] = (computed_status == 'online')
             if db is not None:
                 try:
                     db.devices.update_one(
                         {'device_id': did},
-                        {'$set': {'status': computed_status, 'tracking_active': (computed_status == 'online')}}
+                        {'$set': {'status': computed_status}}
                     )
                 except Exception:
                     pass
         d_copy['status'] = computed_status
-        d_copy['tracking_active'] = (computed_status == 'online')
         final_devices.append(d_copy)
 
     final_devices.sort(key=lambda x: x.get('last_seen', ''), reverse=True)
@@ -428,7 +428,8 @@ def update_device(device_id: str, updates: dict) -> dict:
         'device_name', 'platform', 'revoked', 'last_seen', 'last_location',
         'current_fence', 'status', 'is_offline_forced', 'offline_reason',
         'distance_outside', 'tracking_active', 'fingerprint', 'client_ip',
-        'device_number', 'client_uuid', 'outside_fence', 'flagged', 'flag'
+        'device_number', 'client_uuid', 'outside_fence', 'flagged', 'flag',
+        'is_tab_active'
     ]
     for k in allowed_keys:
         if k in updates:
@@ -436,12 +437,10 @@ def update_device(device_id: str, updates: dict) -> dict:
 
     now = datetime.utcnow().isoformat() + 'Z'
     existing['updated_at'] = now
-    if existing.get('is_offline_forced') or existing.get('tracking_active') is False or updates.get('status') == 'offline':
+    if existing.get('is_offline_forced') or existing.get('is_tab_active') is False or updates.get('status') == 'offline':
         existing['status'] = 'offline'
-        existing['tracking_active'] = False
     else:
         existing['status'] = compute_device_status(existing)
-        existing['tracking_active'] = (existing['status'] == 'online')
 
     in_memory_devices[device_id] = existing
 
@@ -456,22 +455,45 @@ def update_device(device_id: str, updates: dict) -> dict:
 
     return existing
 
-def ping_device(device_id: str, client_ip: str = None, status: str = 'online', tracking_active: bool = True) -> dict:
+def ping_device(
+    device_id: str,
+    client_ip: str = None,
+    status: str = 'online',
+    tracking_active: bool = None,
+    is_tab_active: bool = True,
+    client_uuid: str = None
+) -> dict:
     """
-    Heartbeat / state update from mobile device.
-    Keeps device ONLINE when tracking is active, or sets OFFLINE when tracking is stopped.
+    Heartbeat / state update from mobile device or web panel.
+    - When user is ON the page (is_tab_active=True, status='online'): device is ONLINE.
+    - When user is on another page, minimizes, closes tab/browser: device is OFFLINE.
     """
     dev = get_device(device_id)
+    if not dev and client_uuid:
+        dev = find_existing_device(client_uuid=client_uuid)
+        if dev:
+            device_id = dev['device_id']
+
     if not dev or dev.get('revoked'):
         return None
+
     now = datetime.utcnow().isoformat() + 'Z'
     updates = {'last_seen': now}
     if client_ip:
         updates['client_ip'] = client_ip
 
-    is_online = (status == 'online' and tracking_active)
-    updates['status'] = 'online' if is_online else 'offline'
-    updates['tracking_active'] = is_online
+    is_online = (status == 'online' and is_tab_active is not False)
+    if is_online:
+        updates['status'] = 'online'
+        updates['is_offline_forced'] = False
+        updates['is_tab_active'] = True
+    else:
+        updates['status'] = 'offline'
+        updates['is_offline_forced'] = True
+        updates['is_tab_active'] = False
+
+    if tracking_active is not None:
+        updates['tracking_active'] = bool(tracking_active)
 
     return update_device(device_id, updates)
 

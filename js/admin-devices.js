@@ -170,7 +170,7 @@
         if (isOutside) {
           return '⚪ Offline (Last: Outside Fence)';
         }
-        return '⚪ Offline (Tracking Stopped)';
+        return device.is_tab_active === false ? '⚪ Offline (Working on another page)' : '⚪ Offline (Disconnected)';
       }
 
       if (isOutside) {
@@ -179,7 +179,11 @@
       }
 
       if (!lastLoc || typeof lastLoc.latitude !== 'number' || typeof lastLoc.longitude !== 'number') {
-        return 'No GPS Fix';
+        return '🟢 Online (Page Active - GPS Standby)';
+      }
+
+      if (device.tracking_active === false) {
+        return `🟢 Online (Page Active • GPS Standby)`;
       }
 
       // Check current geofences from active map store

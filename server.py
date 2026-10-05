@@ -974,16 +974,41 @@ def create_app():
     @app.route('/api/devices/<did>/ping', methods=['POST'])
     @app.route('/devices/<did>/ping', methods=['POST'])
     def api_device_ping(did):
-        data = request.get_json(force=True, silent=True) or {}
+        data = request.get_json(force=True, silent=True)
+        if not data and request.data:
+            try:
+                data = json.loads(request.data.decode('utf-8'))
+            except Exception:
+                data = {}
+        if not data:
+            data = {}
+
         client_ip = request.headers.get('x-forwarded-for', request.remote_addr)
         if client_ip and ',' in client_ip:
             client_ip = client_ip.split(',')[0].strip()
+
         req_status = data.get('status', 'online')
-        req_active = data.get('tracking_active', (req_status == 'online'))
-        updated = ping_device(did, client_ip=client_ip, status=req_status, tracking_active=req_active)
+        req_active = data.get('tracking_active')
+        is_tab_active = data.get('is_tab_active', (req_status == 'online'))
+        client_uuid = data.get('client_uuid')
+
+        updated = ping_device(
+            did,
+            client_ip=client_ip,
+            status=req_status,
+            tracking_active=req_active,
+            is_tab_active=is_tab_active,
+            client_uuid=client_uuid
+        )
         if not updated:
             return jsonify({'error': 'Device not found'}), 404
-        return jsonify({'success': True, 'device_id': did, 'status': updated.get('status', 'online'), 'tracking_active': updated.get('tracking_active', True)})
+        return jsonify({
+            'success': True,
+            'device_id': did,
+            'status': updated.get('status', 'online'),
+            'tracking_active': updated.get('tracking_active', False),
+            'is_tab_active': updated.get('is_tab_active', True)
+        })
 
     @app.route('/api/devices/<did>', methods=['PUT'])
     @app.route('/devices/<did>', methods=['PUT'])
@@ -1318,10 +1343,24 @@ def run_builtin():
             elif path.startswith('/api/devices/') and path.endswith('/ping'):
                 did = path.split('/')[3]
                 req_status = body.get('status', 'online')
-                req_active = body.get('tracking_active', (req_status == 'online'))
-                updated = ping_device(did, status=req_status, tracking_active=req_active)
+                req_active = body.get('tracking_active')
+                is_tab_active = body.get('is_tab_active', (req_status == 'online'))
+                client_uuid = body.get('client_uuid')
+                updated = ping_device(
+                    did,
+                    status=req_status,
+                    tracking_active=req_active,
+                    is_tab_active=is_tab_active,
+                    client_uuid=client_uuid
+                )
                 if updated:
-                    self.send_json({'success': True, 'device_id': did, 'status': updated.get('status', 'online'), 'tracking_active': updated.get('tracking_active', True)})
+                    self.send_json({
+                        'success': True,
+                        'device_id': did,
+                        'status': updated.get('status', 'online'),
+                        'tracking_active': updated.get('tracking_active', False),
+                        'is_tab_active': updated.get('is_tab_active', True)
+                    })
                 else:
                     self.send_json({'error': 'Device not found'}, status=404)
             elif path in ('/api/telemetry', '/telemetry'):

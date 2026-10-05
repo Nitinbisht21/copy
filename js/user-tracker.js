@@ -658,18 +658,33 @@
         this.networkStatus.textContent = 'Network Offline (Buffering GPS)';
       });
 
-      // Handle Page Visibility Change (Minimizing/Restoring browser tab)
-      document.addEventListener('visibilitychange', async () => {
+      // Handle Page Visibility Change (Tab switch / minimize / restore)
+      document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
+          // User returned to this tab / page: mark ONLINE immediately
+          this.startPresenceHeartbeat();
           if (this.isTracking) {
-            await this.requestWakeLock();
+            this.requestWakeLock();
             this.forceImmediateSync = true;
           }
         } else {
-          // Tab is minimized or hidden: ensure audio keeper is running to prevent OS sleep
-          if (this.isTracking) {
-            this.audioKeeper.start();
-          }
+          // User switched to another tab, minimized browser, or opened another app: mark OFFLINE immediately
+          this.stopPresenceHeartbeat();
+          this.sendPresence('offline', false);
+        }
+      });
+
+      // Window focus / blur fallback for multi-window and desktop switching
+      window.addEventListener('focus', () => {
+        if (document.visibilityState === 'visible') {
+          this.startPresenceHeartbeat();
+        }
+      });
+
+      window.addEventListener('blur', () => {
+        if (document.hidden) {
+          this.stopPresenceHeartbeat();
+          this.sendPresence('offline', false);
         }
       });
 
@@ -686,18 +701,31 @@
       if (window._vfSyncInterval) clearInterval(window._vfSyncInterval);
       window._vfSyncInterval = setInterval(() => this.updateSyncElapsed(), 1000);
 
-      // Instantly mark device OFFLINE if mobile browser tab is closed or navigated away
+      // Instantly mark device OFFLINE if browser tab or window is closed or removed
       const sendOfflineBeacon = () => {
-        if (this.isTracking && this.deviceId) {
-          const payload = JSON.stringify({
-            client_uuid: this.clientUuid,
-            status: 'offline',
-            tracking_active: false
-          });
-          if (navigator.sendBeacon) {
-            navigator.sendBeacon(API.PING(this.deviceId), new Blob([payload], { type: 'application/json' }));
-          }
+        if (!this.deviceId) return;
+        this.stopPresenceHeartbeat();
+        const payload = JSON.stringify({
+          client_uuid: this.clientUuid,
+          status: 'offline',
+          is_tab_active: false,
+          tracking_active: false
+        });
+        const url = API.PING(this.deviceId);
+
+        if (navigator.sendBeacon) {
+          try {
+            navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }));
+          } catch (e) {}
         }
+        try {
+          fetch(url, {
+            method: 'POST',
+            body: payload,
+            headers: { 'Content-Type': 'application/json' },
+            keepalive: true
+          }).catch(() => {});
+        } catch (e) {}
       };
 
       window.addEventListener('pagehide', sendOfflineBeacon);
@@ -724,6 +752,7 @@
       this.networkStatus.textContent = 'Registering new phone slot...';
 
       await this.registerDeviceOnBackend(null, null);
+      this.startPresenceHeartbeat();
     }
 
     detectPlatform() {
@@ -731,6 +760,80 @@
       if (/android/i.test(ua)) return 'android';
       if (/iPad|iPhone|iPod/.test(ua)) return 'ios';
       return 'browser';
+    }
+
+    startPresenceHeartbeat() {
+      this.stopPresenceHeartbeat();
+      if (!this.deviceId) return;
+
+      // Immediate online presence ping
+      this.sendPresence('online', true);
+
+      // 5-second presence heartbeat while page is active and visible
+      this._presenceInterval = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          this.sendPresence('online', true);
+        }
+      }, 5000);
+    }
+
+    stopPresenceHeartbeat() {
+      if (this._presenceInterval) {
+        clearInterval(this._presenceInterval);
+        this._presenceInterval = null;
+      }
+    }
+
+    sendPresence(status, isTabActive = true) {
+      if (!this.deviceId) return;
+      const isOnline = (status === 'online' && isTabActive);
+      const payload = JSON.stringify({
+        client_uuid: this.clientUuid,
+        status: isOnline ? 'online' : 'offline',
+        is_tab_active: isTabActive,
+        tracking_active: Boolean(this.isTracking)
+      });
+      const url = API.PING(this.deviceId);
+
+      try {
+        if (!isOnline && navigator.sendBeacon) {
+          navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }));
+        }
+      } catch (e) {}
+
+      try {
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload,
+          keepalive: true
+        }).catch(() => {});
+      } catch (e) {}
+
+      this.updatePresenceUI(isOnline);
+    }
+
+    updatePresenceUI(isOnline) {
+      if (this.isTracking) {
+        if (isOnline) {
+          this.statusPulse.className = 'pulse-dot active';
+          this.statusLabel.textContent = 'Live Tracking Active';
+        } else {
+          this.statusPulse.className = 'pulse-dot offline';
+          this.statusLabel.textContent = 'Device Offline (Working on another page)';
+          this.networkStatus.textContent = 'Offline • Paused while working on another page';
+        }
+      } else {
+        if (isOnline) {
+          this.statusPulse.className = 'pulse-dot active';
+          this.statusLabel.textContent = 'Device Online (Ready)';
+          this.networkStatus.textContent = 'Device Online • Page Active (Click Start to Track)';
+        } else {
+          this.statusPulse.className = 'pulse-dot offline';
+          this.statusLabel.textContent = 'Device Offline (Working on another page)';
+          this.networkStatus.textContent = 'Offline • Tab in background';
+        }
+      }
     }
 
     async initDevice() {
@@ -741,6 +844,9 @@
       if (this.userDisplayName) this.userDisplayName.textContent = this.deviceName || 'Connecting...';
       if (this.inputDeviceName) this.inputDeviceName.value = this.deviceName || '';
       if (this.inputDeviceId) this.inputDeviceId.value = this.deviceId || '';
+
+      // Immediately start presence tracking since user is ON this page!
+      this.startPresenceHeartbeat();
 
       // If tracking was active before page refresh, auto-resume tracking seamlessly!
       if (this.wasTrackingActive) {
@@ -900,30 +1006,10 @@
       this.lastTelemetrySendTime = 0;
       this.isOfflineDueToFence = false;
 
-      // Immediately notify backend that device is now OFFLINE and stopped tracking
+      // When stopping GPS tracking, device stays ONLINE if user is on this page!
+      const isPageActive = (document.visibilityState === 'visible');
       if (this.deviceId) {
-        const payload = JSON.stringify({
-          client_uuid: this.clientUuid,
-          status: 'offline',
-          tracking_active: false
-        });
-        try {
-          if (navigator.sendBeacon) {
-            navigator.sendBeacon(API.PING(this.deviceId), new Blob([payload], { type: 'application/json' }));
-          } else {
-            fetch(API.PING(this.deviceId), {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: payload
-            }).catch(() => {});
-          }
-        } catch (e) {
-          fetch(API.PING(this.deviceId), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: payload
-          }).catch(() => {});
-        }
+        this.sendPresence(isPageActive ? 'online' : 'offline', isPageActive);
       }
 
       if (this.watchId !== null) {
@@ -937,9 +1023,11 @@
       if (this.pipTracker) this.pipTracker.stop();
 
       this.updateUIState('stopped');
-      this.networkStatus.textContent = reason || 'Tracking Stopped (Device Offline)';
+      this.networkStatus.textContent = reason || (isPageActive
+        ? 'GPS Tracking Stopped • Device Online (Ready)'
+        : 'Tracking Stopped • Device Offline');
       if (this.statSyncCountdown) {
-        this.statSyncCountdown.textContent = 'Next upload: Standby (Offline)';
+        this.statSyncCountdown.textContent = 'Next upload: Standby';
         this.statSyncCountdown.style.color = '#94a3b8';
       }
     }
@@ -1276,8 +1364,9 @@
         this.btnToggleTrack.className = 'btn-track loading';
         this.btnTrackText.textContent = 'Connecting GPS...';
       } else {
-        this.statusPulse.className = 'pulse-dot offline';
-        this.statusLabel.textContent = 'Tracking Stopped (Offline)';
+        const isPageActive = (document.visibilityState === 'visible');
+        this.statusPulse.className = isPageActive ? 'pulse-dot active' : 'pulse-dot offline';
+        this.statusLabel.textContent = isPageActive ? 'Device Online (Ready)' : 'Offline (Working on another page)';
         this.btnToggleTrack.className = 'btn-track';
         this.btnTrackText.textContent = 'Start GPS Tracking';
         this.btnTrackIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';
