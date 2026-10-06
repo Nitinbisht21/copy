@@ -39,7 +39,7 @@
     PING: (id) => `/api/devices/${id}/ping`
   };
 
-  const TELEMETRY_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes (120,000 ms) data footprint interval
+  const TELEMETRY_INTERVAL_MS = 6 * 1000; // 6 seconds live telemetry footprint interval
 
   // Multi-tier storage persistence (LocalStorage -> SessionStorage -> Persistent Cookie)
   function getStoredValue(key) {
@@ -148,27 +148,42 @@
     constructor(tracker = null) {
       this.tracker = tracker;
       this.audio = null;
+      this.audioCtx = null;
+      this.oscillator = null;
+      this.gainNode = null;
       this.isActive = false;
+      this.isUnlocked = false;
+
+      // Unlock audio playback on first user gesture (touch or click)
+      const unlock = () => {
+        this.unlockAudio();
+      };
+      document.addEventListener('click', unlock, { once: true, passive: true });
+      document.addEventListener('touchstart', unlock, { once: true, passive: true });
+    }
+
+    unlockAudio() {
+      if (this.isUnlocked) return;
+      this.isUnlocked = true;
+      try {
+        if (!this.audio) {
+          // Standard valid 44-byte silent WAV data URI
+          const silentWav = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+          this.audio = new Audio(silentWav);
+          this.audio.loop = true;
+          this.audio.volume = 0.001;
+        }
+      } catch (e) {}
     }
 
     start() {
-      // Desktop / Laptop Guard:
-      // Laptops have full multitasking and do NOT freeze tabs like mobile OS.
-      // Playing looped audio on Windows laptops can spin Chromium's audio renderer at 100% CPU.
-      if (this.tracker && typeof this.tracker.detectPlatform === 'function') {
-        if (this.tracker.detectPlatform() === 'browser') {
-          return;
-        }
-      }
-
       if (this.isActive) return;
       this.isActive = true;
 
-      // Valid 1-second 8kHz mono silent PCM WAV (8,044 bytes, duration = 1.000s)
-      // Ticks cleanly once per second rather than a 0-sample spin-lock
+      // 1. Silent HTMLAudioElement playback
       try {
         if (!this.audio) {
-          const silentWav = 'data:audio/wav;base64,UklGRmQfAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQB4HwAA' + 'CAgI'.repeat(2000);
+          const silentWav = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
           this.audio = new Audio(silentWav);
           this.audio.loop = true;
           this.audio.volume = 0.001;
@@ -178,6 +193,38 @@
           p.catch(() => {});
         }
       } catch (e) {}
+
+      // 2. Web Audio API zero-energy oscillator (ensures browser does not freeze JavaScript threads)
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass && !this.audioCtx) {
+          this.audioCtx = new AudioContextClass();
+          this.oscillator = this.audioCtx.createOscillator();
+          this.gainNode = this.audioCtx.createGain();
+          this.gainNode.gain.value = 0.0001; // Inaudible
+          this.oscillator.frequency.value = 440;
+          this.oscillator.connect(this.gainNode);
+          this.gainNode.connect(this.audioCtx.destination);
+          this.oscillator.start();
+        }
+        if (this.audioCtx && this.audioCtx.state === 'suspended') {
+          this.audioCtx.resume().catch(() => {});
+        }
+      } catch (e) {}
+
+      // 3. MediaSession API registration: signals to mobile OS that this tab is an active media/field service
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: 'Virtual Fence GPS Tracker',
+            artist: 'Field GPS Service Active',
+            album: 'Live Background Geofence'
+          });
+          navigator.mediaSession.playbackState = 'playing';
+          navigator.mediaSession.setActionHandler('play', () => this.start());
+          navigator.mediaSession.setActionHandler('pause', () => {});
+        } catch (e) {}
+      }
     }
 
     stop() {
@@ -186,6 +233,16 @@
         try {
           this.audio.pause();
           this.audio.currentTime = 0;
+        } catch (e) {}
+      }
+      if (this.audioCtx) {
+        try {
+          this.audioCtx.suspend().catch(() => {});
+        } catch (e) {}
+      }
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.playbackState = 'paused';
         } catch (e) {}
       }
     }
@@ -200,24 +257,33 @@
             if (!timer) {
               timer = setInterval(function() {
                 self.postMessage('tick');
-              }, 5000); // tick every 5 seconds for reliable background tracking
+              }, 4000); // tick every 4 seconds for reliable background execution
             }
           } else if (e.data === 'stop') {
             if (timer) {
               clearInterval(timer);
               timer = null;
             }
+          } else if (e.data === 'ping') {
+            self.postMessage('pong');
           }
         };
       `;
       const blob = new Blob([code], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const worker = new Worker(blobUrl);
-      URL.revokeObjectURL(blobUrl);
+      // Retain blobUrl for 30s so worker thread has completed script evaluation before revocation
+      setTimeout(() => {
+        try { URL.revokeObjectURL(blobUrl); } catch (e) {}
+      }, 30000);
+
       worker.onmessage = function(e) {
         if (e.data === 'tick' && typeof onTick === 'function') {
           onTick();
         }
+      };
+      worker.onerror = function(err) {
+        console.warn('Worker keeper notice:', err);
       };
       return worker;
     } catch (err) {
@@ -253,15 +319,6 @@
     }
 
     init() {
-      // Desktop / Laptop guard:
-      // Floating PiP canvas streaming is only needed on mobile phones to bypass Android/iOS background throttling.
-      // On laptops, hide PiP completely to eliminate GPU video encoding overhead and prevent browser freezing.
-      if (this.tracker && typeof this.tracker.detectPlatform === 'function' && this.tracker.detectPlatform() === 'browser') {
-        const pipGroup = document.querySelector('.pip-control-group');
-        if (pipGroup) pipGroup.style.display = 'none';
-        return;
-      }
-
       this.canvas = document.getElementById('pip-canvas');
       this.video = document.getElementById('pip-video');
       this.btnPip = document.getElementById('btn-toggle-pip');
@@ -422,7 +479,7 @@
     async startStream() {
       this.isPipActive = true;
       this.renderFrame();
-      if (!this.stream) {
+      if (!this.stream && this.canvas && typeof this.canvas.captureStream === 'function') {
         try {
           this.stream = this.canvas.captureStream(1); // 1 fps is lightweight, zero memory leak
           this.video.srcObject = this.stream;
@@ -969,12 +1026,17 @@
         this.networkStatus.textContent = 'Acquiring GPS Fix...';
       }
 
-      // Request Screen Wake Lock (only active on mobile devices to preserve laptop power)
+      // Request Screen Wake Lock (supported across mobile and desktop)
       await this.requestWakeLock();
 
-      // Start Background Audio Keeper & Background Worker (PiP stream starts only on user toggle)
+      // Start Background Audio Keeper & Background Worker
       this.audioKeeper.start();
       if (this.worker) this.worker.postMessage('start');
+
+      // Auto-launch Picture-in-Picture floating HUD if user enabled auto-pip
+      if (this.pipTracker && typeof this.pipTracker.autoEnableIfRequested === 'function') {
+        this.pipTracker.autoEnableIfRequested().catch(() => {});
+      }
 
       // Immediately notify backend that device is ONLINE and actively tracking
       if (this.deviceId) {
@@ -996,7 +1058,7 @@
 
       const options = {
         enableHighAccuracy: true,
-        maximumAge: 4000,
+        maximumAge: 10000,
         timeout: 15000
       };
 
@@ -1038,8 +1100,6 @@
     }
 
     async requestWakeLock() {
-      // Desktop laptops do not need wake lock (prevents display driver lockups)
-      if (this.detectPlatform() === 'browser') return;
       if ('wakeLock' in navigator) {
         try {
           this.wakeLock = await navigator.wakeLock.request('screen');
@@ -1058,33 +1118,44 @@
       }
     }
 
-    // Background worker heartbeat called every 5s to keep device alive and tracking
+    // Background worker heartbeat called every 4s to keep device alive and tracking
     async handleBackgroundHeartbeat() {
       const now = Date.now();
 
       // If tracking is active, ensure audio keeper is running and fetch fresh GPS coordinates
       if (this.isTracking) {
-        if (document.visibilityState === 'hidden') {
-          this.audioKeeper.start();
-          if (navigator.geolocation) {
-            try {
-              navigator.geolocation.getCurrentPosition(
-                (pos) => this.handlePosition(pos),
-                () => {},
-                { enableHighAccuracy: true, maximumAge: 4000, timeout: 8000 }
-              );
-            } catch (e) {}
-          }
+        this.audioKeeper.start();
+
+        // 1. Fetch fresh GPS fix in background
+        if (navigator.geolocation) {
+          try {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => this.handlePosition(pos),
+              (err) => {
+                // If high accuracy times out in background, query with relaxed maximumAge
+                if (err && err.code === err.TIMEOUT) {
+                  try {
+                    navigator.geolocation.getCurrentPosition(
+                      (fallbackPos) => this.handlePosition(fallbackPos),
+                      () => {},
+                      { enableHighAccuracy: false, maximumAge: 30000, timeout: 5000 }
+                    );
+                  } catch (e) {}
+                }
+              },
+              { enableHighAccuracy: true, maximumAge: 10000, timeout: 8000 }
+            );
+          } catch (e) {}
         }
 
-        // Check 2-minute database cadence while hidden: If 2 minutes elapsed, send current coordinates
+        // 2. Transmit real GPS telemetry every 6s (TELEMETRY_INTERVAL_MS)
         const timeSinceTelemetry = now - this.lastTelemetrySendTime;
         const timeSincePing = now - this.lastPingSendTime;
 
         if (this.lastPosition && this.lastPosition.latitude && timeSinceTelemetry >= TELEMETRY_INTERVAL_MS) {
           await this.sendTelemetry(this.lastPosition);
-        } else if (this.deviceId && (timeSinceTelemetry > 5000 || timeSincePing > 5000)) {
-          // Heartbeat ping every 5s: Keep device ONLINE on server
+        } else if (this.deviceId && (timeSinceTelemetry > 4000 || timeSincePing > 4000)) {
+          // Heartbeat ping every 4-5s: Keep device ONLINE on server
           this.lastPingSendTime = now;
           try {
             await fetch(API.PING(this.deviceId), {
@@ -1101,7 +1172,7 @@
           } catch (e) {}
         }
       } else {
-        // When not tracking, send presence heartbeat ping every 5s to keep device ONLINE while webpage is open
+        // When not tracking, send presence heartbeat ping every 4-5s to keep device ONLINE while webpage is open
         if (this.deviceId) {
           this.sendPresence('online', true);
         }
@@ -1117,9 +1188,8 @@
       if (!this.isTracking || !position || !position.coords) return;
 
       const now = Date.now();
-      // Throttle GPS sensor ticks: 1500ms on desktop/laptop, 800ms on mobile
-      // Eliminates UI thread lag, stops memory thrashing, prevents laptop browser freeze
-      const minInterval = (this.detectPlatform() === 'browser') ? 1500 : 800;
+      // Throttle GPS sensor ticks: 1000ms on desktop/laptop, 800ms on mobile
+      const minInterval = (this.detectPlatform() === 'browser') ? 1000 : 800;
       if (this.lastPosUpdateTime && (now - this.lastPosUpdateTime < minInterval)) {
         return;
       }
@@ -1142,14 +1212,14 @@
         timestamp
       };
 
-      // Persist in localStorage (fast, zero cookie serialization overhead)
+      // Persist in localStorage
       setStoredValue(STORAGE_KEYS.LAST_POSITION, JSON.stringify(this.lastPosition));
 
       // Always update local device display smoothly in real-time
       this.updateTelemetryDisplay(this.lastPosition);
       this.updateUIState('active');
 
-      // Throttle database footprint transmissions to every 2 minutes (send first fix immediately or on catch-up unhide)
+      // Transmit live GPS coordinates every 6s or immediately on first fix / unhide
       const shouldSend = this.forceImmediateSync ||
                          (this.lastTelemetrySendTime === 0) ||
                          ((now - this.lastTelemetrySendTime) >= TELEMETRY_INTERVAL_MS);
@@ -1160,18 +1230,33 @@
     }
 
     handlePositionError(error) {
-      switch (error.code) {
-        case error.PERMISSION_DENIED:
-          this.stopTracking('Location permission denied. GPS tracking stopped.');
+      // In background tabs, browsers often emit temporary POSITION_UNAVAILABLE or TIMEOUT.
+      // NEVER kill the tracking session while the user is actively tracking!
+      if (document.visibilityState === 'hidden') {
+        console.warn('Background GPS notice:', error && error.message);
+        return;
+      }
+
+      switch (error ? error.code : 0) {
+        case 1: // PERMISSION_DENIED
+          if (this.networkStatus) {
+            this.networkStatus.textContent = 'Location permission notice: Keep GPS enabled';
+          }
           break;
-        case error.POSITION_UNAVAILABLE:
-          this.stopTracking('GPS turned off / unavailable on mobile. Device Offline.');
+        case 2: // POSITION_UNAVAILABLE
+          if (this.networkStatus) {
+            this.networkStatus.textContent = 'Acquiring GPS signal (Sensors standby)...';
+          }
           break;
-        case error.TIMEOUT:
-          this.networkStatus.textContent = 'GPS acquisition timed out. Retrying satellite fix...';
+        case 3: // TIMEOUT
+          if (this.networkStatus) {
+            this.networkStatus.textContent = 'Acquiring satellite fix...';
+          }
           break;
         default:
-          this.networkStatus.textContent = 'GPS signal lost. Checking sensors...';
+          if (this.networkStatus) {
+            this.networkStatus.textContent = 'Acquiring GPS fix...';
+          }
           break;
       }
     }

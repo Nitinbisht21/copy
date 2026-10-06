@@ -17,9 +17,9 @@ from services.db import get_tracking_db, in_memory_devices, in_memory_locations,
 
 GENERIC_NAMES = {'mobile device', 'mobile phone', 'device', 'phone', 'anonymous', 'anon'}
 
-# Mobile devices send heartbeats/telemetry every 5s.
-# 15-second watchdog timeout allows rapid detection when webpage is killed or closed from device.
-ONLINE_HEARTBEAT_TIMEOUT_SECONDS = 15
+# Mobile devices send heartbeats/telemetry every 4-5s.
+# 25-second watchdog timeout accommodates mobile background OS packet jitter without false disconnects.
+ONLINE_HEARTBEAT_TIMEOUT_SECONDS = 25
 
 def parse_iso_timestamp(ts) -> datetime:
     """Safely parses ISO timestamp into UTC-aware datetime."""

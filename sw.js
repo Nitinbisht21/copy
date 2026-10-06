@@ -3,7 +3,7 @@
  * Enables PWA installability, standalone execution mode, and offline resilience.
  */
 
-const CACHE_NAME = 'vf-tracker-v2';
+const CACHE_NAME = 'vf-tracker-v3';
 const STATIC_ASSETS = [
   '/',
   '/track',
